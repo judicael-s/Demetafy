@@ -71,8 +71,8 @@ export default function Home(): JSX.Element {
   };
 
   const ingestedAt = () => {
-    const a = app.archive();
-    return a ? new Date(a.ingested_at).toLocaleString() : "";
+    const a = app.activeArchive();
+    return a ? new Date(a.ingestedAt).toLocaleString() : "";
   };
 
   // The first parseable service not yet imported, so Home can offer to add it
@@ -132,22 +132,25 @@ export default function Home(): JSX.Element {
         )}
       </Show>
 
-      <Show when={app.archive()}>
+      <Show when={app.activeArchive()}>
         {/* "Complete my archive" fetches the link-only content yt-dlp must download:
             Instagram saved + DM shares, Facebook DM-shared reels/videos. FB post and
             album media is already offline in-zip, so the card scopes to conversations. */}
         <div class="mt-8">
-          <ArchiveCompletion service={app.activeService() ?? undefined} />
+          <ArchiveCompletion
+            archiveId={app.activeArchiveId() ?? undefined}
+            service={app.activeService() ?? undefined}
+          />
         </div>
         <div class="mt-6 rounded-xl border border-border bg-surface p-5">
           <h2 class="text-sm font-medium text-ink">Imported archive</h2>
           <dl class="mt-3 grid grid-cols-[8rem_1fr] gap-y-1 text-sm">
             <dt class="text-muted">Service</dt>
-            <dd class="capitalize">{app.archive()!.service}</dd>
+            <dd class="capitalize">{app.activeArchive()!.service}</dd>
             <dt class="text-muted">Imported</dt>
             <dd>{ingestedAt()}</dd>
             <dt class="text-muted">Source</dt>
-            <dd class="truncate font-mono text-xs text-muted">{app.archive()!.source_path}</dd>
+            <dd class="truncate font-mono text-xs text-muted">{app.activeArchive()!.sourcePath}</dd>
           </dl>
         </div>
       </Show>

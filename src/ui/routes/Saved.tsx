@@ -14,6 +14,7 @@ import { createVirtualizer } from "@tanstack/solid-virtual";
 import { fetchCollections, fetchSavedItems, type SavedItem } from "../lib/queries";
 import { downloadQueue } from "../lib/downloads";
 import { itemKey } from "../lib/download-queue";
+import { useApp } from "../state/app";
 import {
   effLocalPathFor,
   effStatusFor,
@@ -141,14 +142,18 @@ function SavedCard(props: { item: SavedItem; onOpen: (i: SavedItem) => void }): 
 }
 
 export default function Saved(): JSX.Element {
+  const app = useApp();
   const params = useParams();
   const collection = () => (params.slug ? decodeURIComponent(params.slug) : undefined);
 
   const [items] = createResource(
-    () => ({ c: collection() }),
-    ({ c }) => fetchSavedItems(c),
+    () => ({ id: app.activeArchiveId(), c: collection() }),
+    ({ id, c }) => fetchSavedItems(id ?? undefined, c),
   );
-  const [collections] = createResource(fetchCollections);
+  const [collections] = createResource(
+    () => app.activeArchiveId(),
+    (id) => fetchCollections(id ?? undefined),
+  );
 
   let scrollEl!: HTMLDivElement;
   const [width, setWidth] = createSignal(0);

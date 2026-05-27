@@ -27,10 +27,10 @@ export async function checkYtdlp(): Promise<string | null> {
 }
 
 /** Enqueue every not-yet-fetched, recoverable download for a one-click "complete
- *  my archive" background fetch. Scoped to one service when given (Instagram =
+ *  my archive" background fetch. Scoped to one import when given (Instagram =
  *  saved + DM shares; Facebook = DM shares). Returns how many were queued. */
-export async function fillArchive(service?: string): Promise<number> {
-  const targets = await fetchDownloadTargets(service);
+export async function fillArchive(archiveId?: number): Promise<number> {
+  const targets = await fetchDownloadTargets(archiveId);
   downloadQueue.enqueue(targets);
   return targets.length;
 }

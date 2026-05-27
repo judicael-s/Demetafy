@@ -9,8 +9,8 @@ import { viewer } from "../state/viewer";
 export default function Profile(): JSX.Element {
   const app = useApp();
   const [changes] = createResource(
-    () => app.activeService(),
-    (svc) => fetchProfileChanges(svc ?? undefined),
+    () => app.activeArchiveId(),
+    (id) => fetchProfileChanges(id ?? undefined),
   );
   const p = () => app.profile();
 
@@ -92,7 +92,10 @@ export default function Profile(): JSX.Element {
               {/* Link-only downloads: IG saved + DM shares, FB DM-shared videos.
                   FB post/album media is offline in-zip, so the card is conversation-scoped. */}
               <div class="mt-8">
-                <ArchiveCompletion service={app.activeService() ?? undefined} />
+                <ArchiveCompletion
+                  archiveId={app.activeArchiveId() ?? undefined}
+                  service={app.activeService() ?? undefined}
+                />
               </div>
 
               <Show when={(changes()?.length ?? 0) > 0}>

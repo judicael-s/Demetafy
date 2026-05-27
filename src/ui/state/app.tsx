@@ -1,5 +1,6 @@
 import {
   createContext,
+  createMemo,
   createSignal,
   onMount,
   useContext,
@@ -8,15 +9,14 @@ import {
 } from "solid-js";
 import { ingestArchive, type ProgressFn } from "../lib/ingest";
 import {
-  fetchLatestArchive,
+  fetchArchives,
   fetchOverview,
   fetchProfile,
-  fetchServices,
-  type ArchiveRow,
+  type ArchiveAccount,
   type Overview,
   type ProfileRow,
 } from "../lib/queries";
-import { setMediaService } from "../lib/media";
+import { setMediaArchive } from "../lib/media";
 
 export interface Toast {
   id: number;
@@ -30,16 +30,21 @@ export interface AppStore {
   ingesting: Accessor<boolean>;
   profile: Accessor<ProfileRow | null>;
   overview: Accessor<Overview | null>;
-  archive: Accessor<ArchiveRow | null>;
-  /** Distinct imported services, most-recent first (drives the switcher). */
-  services: Accessor<string[]>;
-  /** The service whose content is currently shown; null until anything imported. */
+  /** Every imported archive (account), most-recent first. Drives the switcher. */
+  archives: Accessor<ArchiveAccount[]>;
+  /** The active account whose content is shown; null until anything is imported. */
+  activeArchive: Accessor<ArchiveAccount | null>;
+  /** The active account's id — the scope passed to every content query. */
+  activeArchiveId: Accessor<number | null>;
+  /** The active account's service (instagram | facebook). Drives nav + route guards. */
   activeService: Accessor<string | null>;
+  /** Distinct imported services (drives the "import your other data" prompts). */
+  services: Accessor<string[]>;
   toasts: Accessor<Toast[]>;
   refresh: () => Promise<void>;
   ingest: (paths: string | string[], onProgress?: ProgressFn) => Promise<void>;
-  /** Flip the active service and re-scope all cached data. */
-  setActiveService: (service: string) => Promise<void>;
+  /** Flip the active account and re-scope all cached data. */
+  setActiveArchive: (id: number) => Promise<void>;
   pushToast: (kind: Toast["kind"], message: string) => void;
   dismissToast: (id: number) => void;
 }
@@ -51,12 +56,19 @@ export function AppProvider(props: ParentProps) {
   const [ingesting, setIngesting] = createSignal(false);
   const [profile, setProfile] = createSignal<ProfileRow | null>(null);
   const [overview, setOverview] = createSignal<Overview | null>(null);
-  const [archive, setArchive] = createSignal<ArchiveRow | null>(null);
-  const [services, setServices] = createSignal<string[]>([]);
-  const [activeService, setActive] = createSignal<string | null>(null);
+  const [archives, setArchives] = createSignal<ArchiveAccount[]>([]);
+  const [activeArchiveId, setActiveId] = createSignal<number | null>(null);
   const [toasts, setToasts] = createSignal<Toast[]>([]);
 
   const ready = () => (overview()?.archives ?? 0) > 0;
+
+  // Derived so the rest of the app keeps thinking in terms of the active account
+  // and its service without each consumer re-deriving from the archive list.
+  const activeArchive = createMemo(
+    () => archives().find((a) => a.id === activeArchiveId()) ?? null,
+  );
+  const activeService = createMemo(() => activeArchive()?.service ?? null);
+  const services = createMemo(() => [...new Set(archives().map((a) => a.service))]);
 
   let toastId = 0;
   const pushToast: AppStore["pushToast"] = (kind, message) => {
@@ -68,33 +80,29 @@ export function AppProvider(props: ParentProps) {
   };
   const dismissToast = (id: number) => setToasts((t) => t.filter((x) => x.id !== id));
 
-  async function refresh() {
-    const svc = await fetchServices();
-    setServices(svc);
-    // Default to the most-recently-imported service; keep the user's current
-    // choice when it's still present (e.g. after re-importing the other one).
-    let active = activeService();
-    if (active === null || !svc.includes(active)) {
-      active = svc[0] ?? null;
-      setActive(active);
+  async function refresh(selectNewest = false) {
+    const list = await fetchArchives();
+    setArchives(list);
+    // Default to the most-recently-imported account; keep the current choice when
+    // it's still present (e.g. after importing or removing another one). After an
+    // import we jump to the newest so the user lands on what they just added.
+    let active = activeArchiveId();
+    if (selectNewest || active === null || !list.some((a) => a.id === active)) {
+      active = list[0]?.id ?? null;
     }
-    // Keep media resolution scoped to the active service (see setMediaService).
-    setMediaService(active);
-    const s = active ?? undefined;
-    const [ov, pr, ar] = await Promise.all([
-      fetchOverview(s),
-      fetchProfile(s),
-      fetchLatestArchive(s),
-    ]);
+    setActiveId(active);
+    // Keep media resolution scoped to the active account (see setMediaArchive).
+    setMediaArchive(active);
+    const id = active ?? undefined;
+    const [ov, pr] = await Promise.all([fetchOverview(id), fetchProfile(id)]);
     setOverview(ov);
     setProfile(pr);
-    setArchive(ar);
   }
 
-  /** Flip the active service (the IG/FB switcher) and re-scope all cached data. */
-  const setActiveService = async (svc: string) => {
-    if (svc === activeService()) return;
-    setActive(svc);
+  /** Flip the active account (the switcher) and re-scope all cached data. */
+  const setActiveArchive = async (id: number) => {
+    if (id === activeArchiveId()) return;
+    setActiveId(id);
     await refresh();
   };
 
@@ -104,7 +112,7 @@ export function AppProvider(props: ParentProps) {
     setIngesting(true);
     try {
       const counts = await ingestArchive(partPaths, onProgress);
-      await refresh();
+      await refresh(true);
       const empty =
         counts.messages === 0 &&
         counts.savedItems === 0 &&
@@ -143,13 +151,15 @@ export function AppProvider(props: ParentProps) {
     ingesting,
     profile,
     overview,
-    archive,
-    services,
+    archives,
+    activeArchive,
+    activeArchiveId,
     activeService,
+    services,
     toasts,
     refresh,
     ingest,
-    setActiveService,
+    setActiveArchive,
     pushToast,
     dismissToast,
   };

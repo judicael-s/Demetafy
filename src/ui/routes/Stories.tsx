@@ -4,6 +4,7 @@ import { ArchiveImage, FramedVideoThumb, isVideoUri } from "../components/Archiv
 import { EmptyState } from "../components/EmptyState";
 import { SkeletonGrid } from "../components/Skeleton";
 import { vmediaUrl } from "../lib/media";
+import { useApp } from "../state/app";
 import { viewer, type ViewerItem } from "../state/viewer";
 
 function monthLabel(ms: number): string {
@@ -42,7 +43,11 @@ function StoryCard(props: { story: Story; onOpen: () => void }): JSX.Element {
 }
 
 export default function Stories(): JSX.Element {
-  const [stories] = createResource(fetchStories);
+  const app = useApp();
+  const [stories] = createResource(
+    () => app.activeArchiveId(),
+    (id) => fetchStories(id ?? undefined),
+  );
 
   const flat = (): Story[] => stories() ?? [];
   const viewerItems = createMemo<ViewerItem[]>(() =>

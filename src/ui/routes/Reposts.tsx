@@ -3,6 +3,7 @@ import { openExternal } from "../lib/external";
 import { fetchReposts, type Repost } from "../lib/queries";
 import { downloadQueue } from "../lib/downloads";
 import { itemKey, REPOST_SLUG } from "../lib/download-queue";
+import { useApp } from "../state/app";
 import {
   effLocalPathFor,
   effStatusFor,
@@ -117,7 +118,11 @@ function RepostCard(props: { repost: Repost }): JSX.Element {
 }
 
 export default function Reposts(): JSX.Element {
-  const [reposts] = createResource(fetchReposts);
+  const app = useApp();
+  const [reposts] = createResource(
+    () => app.activeArchiveId(),
+    (id) => fetchReposts(id ?? undefined),
+  );
 
   // Count of downloadable reposts not yet fetched — drives the "Download all" label.
   const pending = createMemo(

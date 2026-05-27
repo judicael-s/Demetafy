@@ -144,16 +144,19 @@ pub(crate) fn select_part_for_entry(
     by_name.get(entry).copied()
 }
 
-/// Split a `vmedia` request path into an optional service segment and the still-encoded
-/// entry. The frontend emits `<service>/<encodeURIComponent(entry)>` when a service is
-/// active (the entry never contains a raw `/`, since `encodeURIComponent` escapes it),
-/// or a bare encoded entry otherwise. The service scopes which logical archive the entry
-/// resolves against so Instagram and Facebook media don't cross once both are imported.
-pub(crate) fn split_service_path(path: &str) -> (Option<&str>, &str) {
-    match path.split_once('/') {
-        Some((service, entry)) => (Some(service), entry),
-        None => (None, path),
+/// Split a `vmedia` request path into an optional archive-id segment and the still-encoded
+/// entry. The frontend emits `<archiveId>/<encodeURIComponent(entry)>` when an account is
+/// active (the entry never contains a raw `/`, since `encodeURIComponent` escapes it), or a
+/// bare encoded entry otherwise. The id scopes which imported archive the entry resolves
+/// against so media never crosses between accounts. A non-numeric (or absent) prefix means
+/// no scope — the handler falls back to the newest archive.
+pub(crate) fn split_archive_path(path: &str) -> (Option<i64>, &str) {
+    if let Some((prefix, entry)) = path.split_once('/') {
+        if let Ok(id) = prefix.parse::<i64>() {
+            return (Some(id), entry);
+        }
     }
+    (None, path)
 }
 
 pub(crate) fn content_type(entry: &str) -> &'static str {
@@ -264,23 +267,24 @@ pub(crate) fn respond(bytes: Vec<u8>, ctype: &str, range_header: Option<&str>) -
 
 fn read_entry<R: Runtime>(
     app: &tauri::AppHandle<R>,
-    service: Option<&str>,
+    archive_id: Option<i64>,
     entry: &str,
 ) -> Result<Vec<u8>, String> {
-    // Resolve the part set for the *active service's* archive first, releasing the DB
+    // Resolve the part set for the *active account's* archive first, releasing the DB
     // lock before touching zip files so we never hold two locks at once (vmedia is the
-    // only two-lock path). The service scopes the lookup so that, with both Instagram
-    // and Facebook imported, IG media never resolves against the newer FB archive (or
-    // vice versa); `None` falls back to the newest archive (single-service installs).
-    // Step 16A backfills single-zip archives with one row in `archive_parts`, so there
-    // is intentionally no `source_path` fallback here.
+    // only two-lock path). The archive_id scopes the lookup so media never crosses
+    // between imports — with two Instagram accounts (or IG + FB) loaded, each entry
+    // resolves against its own account's parts. `None` falls back to the newest archive
+    // (covers the brief window before the UI sets the active account). Step 16A backfills
+    // single-zip archives with one row in `archive_parts`, so there is intentionally no
+    // `source_path` fallback here.
     let paths: Vec<String> = {
         let db = app.state::<Db>();
         let conn = db.0.lock().map_err(|e| e.to_string())?;
-        let latest_archive_id: i64 = conn
+        let resolved_archive_id: i64 = conn
             .query_row(
-                "SELECT id FROM archives WHERE (?1 IS NULL OR service = ?1) ORDER BY id DESC LIMIT 1",
-                [service],
+                "SELECT id FROM archives WHERE (?1 IS NULL OR id = ?1) ORDER BY id DESC LIMIT 1",
+                [archive_id],
                 |r| r.get(0),
             )
             .map_err(|e| format!("no archive ingested: {e}"))?;
@@ -288,7 +292,7 @@ fn read_entry<R: Runtime>(
             .prepare("SELECT path FROM archive_parts WHERE archive_id = ?1 ORDER BY idx")
             .map_err(|e| e.to_string())?;
         let rows = stmt
-            .query_map([latest_archive_id], |r| r.get::<_, String>(0))
+            .query_map([resolved_archive_id], |r| r.get::<_, String>(0))
             .map_err(|e| e.to_string())?;
         let mut paths = Vec::new();
         for row in rows {
@@ -296,7 +300,7 @@ fn read_entry<R: Runtime>(
         }
         if paths.is_empty() {
             return Err(format!(
-                "archive {latest_archive_id} has no archive_parts rows"
+                "archive {resolved_archive_id} has no archive_parts rows"
             ));
         }
         paths
@@ -321,13 +325,12 @@ pub fn handle<R: Runtime>(
     ctx: UriSchemeContext<'_, R>,
     request: Request<Vec<u8>>,
 ) -> Response<Vec<u8>> {
-    let (service, encoded_entry) = split_service_path(request.uri().path().trim_start_matches('/'));
-    let service = service.map(percent_decode);
+    let (archive_id, encoded_entry) = split_archive_path(request.uri().path().trim_start_matches('/'));
     let entry = percent_decode(encoded_entry);
     if entry.is_empty() {
         return not_found();
     }
-    let bytes = match read_entry(ctx.app_handle(), service.as_deref(), &entry) {
+    let bytes = match read_entry(ctx.app_handle(), archive_id, &entry) {
         Ok(b) => b,
         Err(e) => {
             log::warn!("vmedia {entry}: {e}");
@@ -402,19 +405,16 @@ mod tests {
     }
 
     #[test]
-    fn split_service_path_separates_service_from_entry() {
+    fn split_archive_path_separates_id_from_entry() {
         assert_eq!(
-            split_service_path("instagram/your_activity%2Fphotos%2F1.jpg"),
-            (Some("instagram"), "your_activity%2Fphotos%2F1.jpg")
+            split_archive_path("7/your_activity%2Fphotos%2F1.jpg"),
+            (Some(7), "your_activity%2Fphotos%2F1.jpg")
         );
-        assert_eq!(
-            split_service_path("facebook/x.png"),
-            (Some("facebook"), "x.png")
-        );
-        // No service prefix (legacy / single archive): the whole path is the entry,
+        assert_eq!(split_archive_path("12/x.png"), (Some(12), "x.png"));
+        // No numeric prefix (legacy / single archive): the whole path is the entry,
         // since an encodeURIComponent-encoded entry never contains a raw slash.
         assert_eq!(
-            split_service_path("media%2Fprofile%2Fa.jpg"),
+            split_archive_path("media%2Fprofile%2Fa.jpg"),
             (None, "media%2Fprofile%2Fa.jpg")
         );
     }

@@ -3,6 +3,7 @@ import { A } from "@solidjs/router";
 import { Icon, type IconName } from "./Icon";
 import { Logo } from "./Logo";
 import { useApp } from "../state/app";
+import type { ArchiveAccount } from "../lib/queries";
 
 interface NavItem {
   label: string;
@@ -32,6 +33,11 @@ const SERVICE_LABELS: Record<string, string> = {
 const serviceLabel = (s: string): string =>
   SERVICE_LABELS[s] ?? s.charAt(0).toUpperCase() + s.slice(1);
 
+/** Switcher label for one imported account: its handle, falling back to the
+ *  display name, then the service. */
+const accountLabel = (a: ArchiveAccount): string =>
+  a.username ? `@${a.username}` : (a.displayName ?? serviceLabel(a.service));
+
 const LINK_CLASS =
   "flex items-center gap-3 rounded-lg px-3 py-2 text-sm text-muted transition-colors hover:bg-surface-2 hover:text-ink";
 
@@ -54,26 +60,29 @@ export function Sidebar(): JSX.Element {
         <span class="text-xl font-semibold tracking-tight">Demetafy</span>
       </div>
 
-      <Show when={app.services().length >= 2}>
+      <Show when={app.archives().length >= 2}>
         <div
-          class="mb-4 flex gap-1 rounded-lg bg-surface-2 p-1"
+          class="mb-4 flex flex-col gap-1 rounded-lg bg-surface-2 p-1"
           role="tablist"
-          aria-label="Service"
+          aria-label="Account"
         >
-          <For each={app.services()}>
-            {(svc) => (
+          <For each={app.archives()}>
+            {(acc) => (
               <button
                 type="button"
                 role="tab"
-                aria-selected={app.activeService() === svc}
-                onClick={() => void app.setActiveService(svc)}
-                class="flex-1 rounded-md px-2 py-1 text-xs font-medium transition-colors"
+                aria-selected={app.activeArchiveId() === acc.id}
+                onClick={() => void app.setActiveArchive(acc.id)}
+                class="flex items-center justify-between gap-2 rounded-md px-2 py-1.5 transition-colors"
                 classList={{
-                  "bg-accent text-accent-ink": app.activeService() === svc,
-                  "text-muted hover:text-ink": app.activeService() !== svc,
+                  "bg-accent text-accent-ink": app.activeArchiveId() === acc.id,
+                  "text-muted hover:text-ink": app.activeArchiveId() !== acc.id,
                 }}
               >
-                {serviceLabel(svc)}
+                <span class="truncate text-xs font-medium">{accountLabel(acc)}</span>
+                <span class="shrink-0 text-[10px] font-medium uppercase tracking-wide opacity-70">
+                  {serviceLabel(acc.service)}
+                </span>
               </button>
             )}
           </For>

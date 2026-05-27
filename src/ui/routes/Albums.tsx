@@ -4,6 +4,7 @@ import { EmptyState } from "../components/EmptyState";
 import { SkeletonGrid } from "../components/Skeleton";
 import { fetchAlbums, type FacebookAlbum } from "../lib/queries";
 import { vmediaUrl } from "../lib/media";
+import { useApp } from "../state/app";
 import { viewer, type ViewerItem } from "../state/viewer";
 
 function fmtDate(msOrSec: number | null): string {
@@ -22,7 +23,11 @@ function viewerItems(album: FacebookAlbum): ViewerItem[] {
 }
 
 export default function Albums(): JSX.Element {
-  const [albums] = createResource(() => fetchAlbums("facebook"));
+  const app = useApp();
+  const [albums] = createResource(
+    () => app.activeArchiveId(),
+    (id) => fetchAlbums(id ?? undefined),
+  );
 
   return (
     <div class="flex h-full flex-col">

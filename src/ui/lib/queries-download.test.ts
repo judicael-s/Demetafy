@@ -24,43 +24,60 @@ const SHARES = [
   { id: 3, link: "https://www.facebook.com/reel/9/", status: "downloaded" }, // already done
 ];
 
-describe("download stats/targets are service-scoped", () => {
+describe("download stats/targets are archive-scoped", () => {
   beforeEach(() => mockInvoke.mockReset());
 
-  it("threads the service into both stat queries and combines counts", async () => {
+  it("threads the archive id into both stat queries and combines counts", async () => {
     route({
       query_saved_download_stats: { total: 2, downloaded: 1, unavailable: 0 },
       query_share_rows: SHARES,
     });
 
-    const stats = await fetchDownloadStats("facebook");
+    const stats = await fetchDownloadStats(2);
 
-    expect(mockInvoke).toHaveBeenCalledWith("query_saved_download_stats", { service: "facebook" });
-    expect(mockInvoke).toHaveBeenCalledWith("query_share_rows", { service: "facebook" });
+    expect(mockInvoke).toHaveBeenCalledWith("query_saved_download_stats", { archiveId: 2 });
+    expect(mockInvoke).toHaveBeenCalledWith("query_share_rows", { archiveId: 2 });
     // 2 saved + 2 downloadable shares (#1 none, #3 downloaded; #2 dropped as non-share).
     expect(stats.total).toBe(4);
     expect(stats.downloaded).toBe(2); // 1 saved + share #3
     expect(stats.remaining).toBe(2);
   });
 
-  it("Facebook targets skip saved items (Instagram-only) and scope shares", async () => {
+  it("scopes targets by archive: shares plus that archive's saved items", async () => {
+    // A Facebook archive's saved_items query returns [] (saved is Instagram-only),
+    // so scoping by archive yields the same result the old service branch did —
+    // only the not-yet-fetched share — without a service-specific code path.
     route({ query_share_rows: SHARES, query_saved_items: [] });
 
-    const targets = await fetchDownloadTargets("facebook");
+    const targets = await fetchDownloadTargets(2);
 
-    expect(mockInvoke).toHaveBeenCalledWith("query_share_rows", { service: "facebook" });
-    expect(mockInvoke.mock.calls.map((c) => c[0])).not.toContain("query_saved_items");
-    // Only the not-yet-fetched downloadable share (#1); #2 non-share, #3 already done.
+    expect(mockInvoke).toHaveBeenCalledWith("query_share_rows", { archiveId: 2 });
+    expect(mockInvoke).toHaveBeenCalledWith("query_saved_items", { archiveId: 2, collection: null });
     expect(targets).toEqual([
       { source: "message", refId: 1, url: "https://www.instagram.com/reel/A/", slug: DM_SLUG },
     ]);
   });
 
-  it("Instagram targets include saved items", async () => {
-    route({ query_share_rows: SHARES, query_saved_items: [] });
+  it("turns the active archive's saved items into targets", async () => {
+    route({
+      query_share_rows: [],
+      query_saved_items: [
+        {
+          id: 7,
+          url: "https://www.instagram.com/p/Z/",
+          caption: "",
+          saved_at: 0,
+          collection_names: "[]",
+          download_status: "none",
+          local_path: null,
+          thumb_path: null,
+        },
+      ],
+    });
 
-    await fetchDownloadTargets("instagram");
+    const targets = await fetchDownloadTargets(1);
 
-    expect(mockInvoke.mock.calls.map((c) => c[0])).toContain("query_saved_items");
+    expect(mockInvoke).toHaveBeenCalledWith("query_saved_items", { archiveId: 1, collection: null });
+    expect(targets.some((t) => t.source === "saved" && t.refId === 7)).toBe(true);
   });
 });

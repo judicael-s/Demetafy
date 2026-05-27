@@ -31,7 +31,11 @@ function mediaItem(uri: string, caption?: string, timestampMs?: number | null): 
 }
 
 function FacebookPosts(): JSX.Element {
-  const [posts] = createResource(() => fetchPosts("facebook"));
+  const app = useApp();
+  const [posts] = createResource(
+    () => app.activeArchiveId(),
+    (id) => fetchPosts(id ?? undefined),
+  );
 
   const itemsFor = (post: FacebookPost): ViewerItem[] =>
     post.media.map((m) => mediaItem(m.uri, post.text || post.title, m.createdAt ?? post.createdAt));
@@ -121,7 +125,11 @@ function FacebookPosts(): JSX.Element {
 }
 
 function InstagramPosts(): JSX.Element {
-  const [posts] = createResource(fetchOwnPosts);
+  const app = useApp();
+  const [posts] = createResource(
+    () => app.activeArchiveId(),
+    (id) => fetchOwnPosts(id ?? undefined),
+  );
 
   const viewerItems = createMemo<ViewerItem[]>(() =>
     (posts() ?? []).map((p) => mediaItem(p.uri)),

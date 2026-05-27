@@ -355,10 +355,13 @@ export default function Thread(): JSX.Element {
   const app = useApp();
   const slug = () => decodeURIComponent(params.slug ?? "");
 
-  const [detail] = createResource(slug, (s) => fetchThread(s, app.activeService() ?? undefined));
+  const [detail] = createResource(
+    () => ({ s: slug(), id: app.activeArchiveId() }),
+    ({ s, id }) => fetchThread(s, id ?? undefined),
+  );
   const [selfSender] = createResource(
-    () => app.activeService(),
-    (svc) => fetchSelfSender(svc ?? undefined),
+    () => app.activeArchiveId(),
+    (id) => fetchSelfSender(id ?? undefined),
   );
 
   const [search, setSearch] = createSignal("");

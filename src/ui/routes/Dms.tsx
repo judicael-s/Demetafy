@@ -75,8 +75,8 @@ export default function Dms(): JSX.Element {
   const navigate = useNavigate();
   const app = useApp();
   const [threads] = createResource(
-    () => app.activeService(),
-    (svc) => fetchThreads(svc ?? undefined),
+    () => app.activeArchiveId(),
+    (id) => fetchThreads(id ?? undefined),
   );
   const [sourceSel, setSource] = createSignal<string | null>(null);
   const [sort, setSort] = createSignal<SortKey>("recency");

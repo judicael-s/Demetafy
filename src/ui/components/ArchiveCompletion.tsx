@@ -14,12 +14,13 @@ import { queueCounts } from "../lib/download-queue";
  * Home + Profile. The bar fills "bit by bit" via a debounced stats refetch as the
  * background queue completes items.
  */
-export function ArchiveCompletion(props: { service?: string }): JSX.Element {
-  // Object source (always truthy) so the resource fetches even when `service` is
-  // undefined (= all), and refetches when the active service flips.
+export function ArchiveCompletion(props: { archiveId?: number; service?: string }): JSX.Element {
+  // Object source (always truthy) so the resource fetches even when `archiveId` is
+  // undefined (= all), and refetches when the active account flips. `service` only
+  // drives the Instagram/Facebook wording below.
   const [stats, { refetch }] = createResource(
-    () => ({ service: props.service }),
-    (src) => fetchDownloadStats(src.service),
+    () => ({ archiveId: props.archiveId }),
+    (src) => fetchDownloadStats(src.archiveId),
   );
   const [busy, setBusy] = createSignal(false);
   const noun = (): string => (props.service === "facebook" ? "shared videos" : "posts");
@@ -50,7 +51,7 @@ export function ArchiveCompletion(props: { service?: string }): JSX.Element {
   const fill = async (): Promise<void> => {
     setBusy(true);
     try {
-      await fillArchive(props.service);
+      await fillArchive(props.archiveId);
     } finally {
       setBusy(false);
     }

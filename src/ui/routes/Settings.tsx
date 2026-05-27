@@ -1,8 +1,9 @@
-import { createSignal, onMount, Show, type JSX } from "solid-js";
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { createSignal, For, onMount, Show, type JSX } from "solid-js";
+import { confirm, open as openDialog } from "@tauri-apps/plugin-dialog";
 import { open as openExternal } from "@tauri-apps/plugin-shell";
 import { useApp } from "../state/app";
 import { ImportPanel } from "../components/ImportPanel";
+import { deleteArchive, type ArchiveAccount } from "../lib/queries";
 import { downloadDir } from "../lib/db";
 import { checkYtdlp } from "../lib/downloads";
 import {
@@ -71,6 +72,25 @@ export default function Settings(): JSX.Element {
     const next = !fetchAvatars();
     setFetchAvatarsEnabled(next);
     setFetchAvatars(next);
+  };
+
+  const accountLabel = (a: ArchiveAccount): string =>
+    a.username ? `@${a.username}` : (a.displayName ?? a.service);
+
+  const removeAccount = async (a: ArchiveAccount): Promise<void> => {
+    const label = accountLabel(a);
+    const ok = await confirm(
+      `Remove ${label}? This deletes its imported data from Demetafy's index. Your original archive files on disk are not touched.`,
+      { title: "Remove account", kind: "warning" },
+    );
+    if (!ok) return;
+    try {
+      await deleteArchive(a.id);
+      await app.refresh();
+      app.pushToast("success", `Removed ${label}.`);
+    } catch (e) {
+      app.pushToast("error", `Could not remove ${label}: ${String(e)}`);
+    }
   };
 
   return (
@@ -189,33 +209,52 @@ export default function Settings(): JSX.Element {
       </section>
 
       <section class="mt-6 rounded-xl border border-border bg-surface p-5">
-        <h2 class="text-sm font-medium text-ink">Archive</h2>
+        <h2 class="text-sm font-medium text-ink">Accounts</h2>
+        <p class="mt-1 text-xs text-muted">
+          Each imported archive is a separate account. Switch between them from the sidebar; import
+          as many Instagram or Facebook archives as you like.
+        </p>
         <Show
-          when={app.archive()}
-          fallback={<p class="mt-1 text-xs text-muted">No archive imported yet.</p>}
+          when={app.archives().length > 0}
+          fallback={<p class="mt-3 text-xs text-muted">No archive imported yet.</p>}
         >
-          {(ar) => (
-            <div class="mt-1">
-              <p class="truncate font-mono text-xs text-muted" title={ar().source_path}>
-                {ar().source_path}
-              </p>
-              <p class="mt-1 text-xs text-muted">
-                Imported {new Date(ar().ingested_at).toLocaleString()}
-                <Show when={app.overview()}>
-                  {(ov) => (
-                    <>
-                      {" · "}
-                      {ov().savedItems.toLocaleString()} saved · {ov().messages.toLocaleString()}{" "}
-                      messages · {ov().threads.toLocaleString()} threads
-                    </>
-                  )}
-                </Show>
-              </p>
-            </div>
-          )}
+          <ul class="mt-3 flex flex-col gap-2">
+            <For each={app.archives()}>
+              {(acc) => (
+                <li class="flex items-center justify-between gap-3 rounded-lg border border-border bg-bg px-3 py-2">
+                  <div class="min-w-0">
+                    <p class="flex items-center gap-2 text-sm text-ink">
+                      <span class="truncate font-medium">{accountLabel(acc)}</span>
+                      <span class="shrink-0 text-[10px] font-medium uppercase tracking-wide text-muted">
+                        {acc.service}
+                      </span>
+                      <Show when={app.activeArchiveId() === acc.id}>
+                        <span class="shrink-0 rounded bg-accent/20 px-1.5 py-0.5 text-[10px] font-medium text-accent">
+                          Active
+                        </span>
+                      </Show>
+                    </p>
+                    <p class="truncate font-mono text-xs text-muted" title={acc.sourcePath}>
+                      {acc.sourcePath}
+                    </p>
+                    <p class="mt-0.5 text-xs text-muted">
+                      Imported {new Date(acc.ingestedAt).toLocaleString()}
+                    </p>
+                  </div>
+                  <button
+                    class="shrink-0 rounded-lg border border-border px-3 py-2 text-sm text-muted transition-colors hover:border-red-500/50 hover:text-red-500"
+                    onClick={() => void removeAccount(acc)}
+                  >
+                    Remove
+                  </button>
+                </li>
+              )}
+            </For>
+          </ul>
         </Show>
         <p class="mt-4 text-xs text-muted">
-          Re-importing replaces the data for an archive with the same path.
+          Re-importing replaces the data for an archive with the same path; a new export is added as
+          another account.
         </p>
         <div class="mt-3">
           <ImportPanel compact />

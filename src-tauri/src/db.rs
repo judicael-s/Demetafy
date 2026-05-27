@@ -853,11 +853,17 @@ pub struct ProfileOut {
     last_login_at: Option<i64>,
 }
 
+/// One imported archive as a selectable account. `username`/`display_name` come
+/// from the joined profile row (NULL when an archive has no profile). The active
+/// item's `id` is the scope passed to every content query.
 #[derive(Serialize, Debug)]
-pub struct ArchiveOut {
-    source_path: String,
+pub struct ArchiveListItem {
+    id: i64,
     service: String,
+    source_path: String,
     ingested_at: i64,
+    username: Option<String>,
+    display_name: Option<String>,
 }
 
 #[derive(Serialize, Debug)]
@@ -1017,8 +1023,8 @@ pub struct AvatarOut {
 // Content counts are scoped to one service when `service` is Some (the
 // `?1 IS NULL OR …` guard makes None mean "all", preserving the unscoped call).
 // `archives` stays a global count — it gates "has anything been imported".
-fn overview(conn: &Connection, service: Option<&str>) -> rusqlite::Result<Overview> {
-    const F: &str = "(?1 IS NULL OR archive_id IN (SELECT id FROM archives WHERE service = ?1))";
+fn overview(conn: &Connection, archive_id: Option<i64>) -> rusqlite::Result<Overview> {
+    const F: &str = "(?1 IS NULL OR archive_id = ?1)";
     let sql = format!(
         "SELECT
            (SELECT COUNT(*) FROM archives),
@@ -1026,14 +1032,14 @@ fn overview(conn: &Connection, service: Option<&str>) -> rusqlite::Result<Overvi
            (SELECT COUNT(*) FROM saved_collections WHERE {F}),
            (SELECT COUNT(*) FROM threads WHERE {F}),
            (SELECT COUNT(*) FROM messages m JOIN threads t ON t.id = m.thread_id
-              WHERE (?1 IS NULL OR t.archive_id IN (SELECT id FROM archives WHERE service = ?1))),
+              WHERE (?1 IS NULL OR t.archive_id = ?1)),
            (SELECT COUNT(*) FROM stories WHERE {F}),
            (SELECT COUNT(*) FROM reposts WHERE {F}),
            (SELECT COUNT(*) FROM own_posts WHERE {F}),
            (SELECT COUNT(*) FROM posts WHERE {F}),
            (SELECT COUNT(*) FROM albums WHERE {F})"
     );
-    conn.query_row(&sql, params![service], |r| {
+    conn.query_row(&sql, params![archive_id], |r| {
         Ok(Overview {
             archives: r.get(0)?,
             saved_items: r.get(1)?,
@@ -1049,14 +1055,14 @@ fn overview(conn: &Connection, service: Option<&str>) -> rusqlite::Result<Overvi
     })
 }
 
-fn profile(conn: &Connection, service: Option<&str>) -> rusqlite::Result<Option<ProfileOut>> {
+fn profile(conn: &Connection, archive_id: Option<i64>) -> rusqlite::Result<Option<ProfileOut>> {
     conn.query_row(
         "SELECT username, display_name, profile_photo_uri, is_private, country_code, fbid,
                 email, phone, gender, date_of_birth, last_login_at
          FROM profile
-         WHERE (?1 IS NULL OR archive_id IN (SELECT id FROM archives WHERE service = ?1))
+         WHERE (?1 IS NULL OR archive_id = ?1)
          LIMIT 1",
-        params![service],
+        params![archive_id],
         |r| {
             Ok(ProfileOut {
                 username: r.get(0)?,
@@ -1089,7 +1095,11 @@ fn row_to_saved(r: &rusqlite::Row) -> rusqlite::Result<SavedItemOut> {
     })
 }
 
-fn saved_items(conn: &Connection, collection: Option<&str>) -> rusqlite::Result<Vec<SavedItemOut>> {
+fn saved_items(
+    conn: &Connection,
+    archive_id: Option<i64>,
+    collection: Option<&str>,
+) -> rusqlite::Result<Vec<SavedItemOut>> {
     const COLS: &str =
         "id, url, caption, saved_at, collection_names, download_status, local_path, thumb_path";
     match collection {
@@ -1097,30 +1107,39 @@ fn saved_items(conn: &Connection, collection: Option<&str>) -> rusqlite::Result<
             let mut stmt = conn.prepare(&format!(
                 "SELECT {COLS} FROM saved_items
                  WHERE EXISTS (SELECT 1 FROM json_each(collection_names) WHERE value = ?1)
+                   AND (?2 IS NULL OR archive_id = ?2)
                  ORDER BY saved_at DESC"
             ))?;
             let rows = stmt
-                .query_map(params![c], row_to_saved)?
+                .query_map(params![c, archive_id], row_to_saved)?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
             Ok(rows)
         }
         None => {
-            let mut stmt =
-                conn.prepare(&format!("SELECT {COLS} FROM saved_items ORDER BY saved_at DESC"))?;
+            let mut stmt = conn.prepare(&format!(
+                "SELECT {COLS} FROM saved_items
+                 WHERE (?1 IS NULL OR archive_id = ?1)
+                 ORDER BY saved_at DESC"
+            ))?;
             let rows = stmt
-                .query_map([], row_to_saved)?
+                .query_map(params![archive_id], row_to_saved)?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
             Ok(rows)
         }
     }
 }
 
-fn collections(conn: &Connection) -> rusqlite::Result<Vec<CollectionCountOut>> {
+fn collections(
+    conn: &Connection,
+    archive_id: Option<i64>,
+) -> rusqlite::Result<Vec<CollectionCountOut>> {
     let mut stmt = conn.prepare(
-        "SELECT name, item_count FROM saved_collections ORDER BY item_count DESC, name COLLATE NOCASE",
+        "SELECT name, item_count FROM saved_collections
+         WHERE (?1 IS NULL OR archive_id = ?1)
+         ORDER BY item_count DESC, name COLLATE NOCASE",
     )?;
     let rows = stmt
-        .query_map([], |r| {
+        .query_map(params![archive_id], |r| {
             Ok(CollectionCountOut {
                 name: r.get(0)?,
                 item_count: r.get(1)?,
@@ -1130,45 +1149,85 @@ fn collections(conn: &Connection) -> rusqlite::Result<Vec<CollectionCountOut>> {
     Ok(rows)
 }
 
-fn latest_archive(conn: &Connection, service: Option<&str>) -> rusqlite::Result<Option<ArchiveOut>> {
-    conn.query_row(
-        "SELECT source_path, service, ingested_at FROM archives
-         WHERE (?1 IS NULL OR service = ?1) ORDER BY id DESC LIMIT 1",
-        params![service],
-        |r| {
-            Ok(ArchiveOut {
-                source_path: r.get(0)?,
-                service: r.get(1)?,
-                ingested_at: r.get(2)?,
-            })
-        },
-    )
-    .optional()
-}
-
-/// Distinct services that have at least one archive, most-recently-ingested
-/// first. Drives the IG/FB switcher and the default active service.
-fn services(conn: &Connection) -> rusqlite::Result<Vec<String>> {
+/// Every imported archive, most-recently-ingested first, joined to its profile
+/// for a display label. Drives the import switcher and the Settings list; each
+/// row is one selectable account (the active scope for all content queries).
+fn archives_list(conn: &Connection) -> rusqlite::Result<Vec<ArchiveListItem>> {
     let mut stmt = conn.prepare(
-        "SELECT service FROM archives GROUP BY service ORDER BY MAX(ingested_at) DESC, service",
+        "SELECT a.id, a.service, a.source_path, a.ingested_at, p.username, p.display_name
+         FROM archives a
+         LEFT JOIN profile p ON p.archive_id = a.id
+         ORDER BY a.ingested_at DESC, a.id DESC",
     )?;
     let rows = stmt
-        .query_map([], |r| r.get::<_, String>(0))?
+        .query_map([], |r| {
+            Ok(ArchiveListItem {
+                id: r.get(0)?,
+                service: r.get(1)?,
+                source_path: r.get(2)?,
+                ingested_at: r.get(3)?,
+                username: r.get(4)?,
+                display_name: r.get(5)?,
+            })
+        })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(rows)
 }
 
-fn threads(conn: &Connection, service: Option<&str>) -> rusqlite::Result<Vec<ThreadSummaryOut>> {
+/// Remove one imported archive and all its content from the index. FTS tables
+/// aren't covered by ON DELETE CASCADE, so clear them first; content rows are
+/// then deleted explicitly (the same set reset_archive clears) plus archive_parts
+/// and the archives row. messages/message_downloads go via the threads→messages
+/// FK cascade. On-disk yt-dlp downloads for this import are intentionally left in
+/// place: they re-link by URL on re-import, and move under the per-vault root in
+/// Phase 2.
+fn delete_archive_rows(conn: &Connection, id: i64) -> rusqlite::Result<()> {
+    conn.execute(
+        "DELETE FROM saved_items_fts WHERE rowid IN (SELECT id FROM saved_items WHERE archive_id = ?1)",
+        params![id],
+    )?;
+    conn.execute(
+        "DELETE FROM messages_fts WHERE rowid IN (SELECT m.id FROM messages m JOIN threads t ON m.thread_id = t.id WHERE t.archive_id = ?1)",
+        params![id],
+    )?;
+    conn.execute(
+        "DELETE FROM reposts_fts WHERE rowid IN (SELECT id FROM reposts WHERE archive_id = ?1)",
+        params![id],
+    )?;
+    for tbl in [
+        "profile",
+        "profile_changes",
+        "saved_items",
+        "saved_collections",
+        "threads", // cascades to messages → message_downloads via FK
+        "stories",
+        "reposts",
+        "own_posts",
+        "connections",
+        "posts",
+        "albums",
+        "archive_parts",
+    ] {
+        conn.execute(
+            &format!("DELETE FROM {tbl} WHERE archive_id = ?1"),
+            params![id],
+        )?;
+    }
+    conn.execute("DELETE FROM archives WHERE id = ?1", params![id])?;
+    Ok(())
+}
+
+fn threads(conn: &Connection, archive_id: Option<i64>) -> rusqlite::Result<Vec<ThreadSummaryOut>> {
     let mut stmt = conn.prepare(
         "SELECT t.id, t.slug, t.source, t.title, t.participants, t.message_count, t.last_message_at,
                 (SELECT content FROM messages WHERE thread_id = t.id ORDER BY timestamp_ms DESC LIMIT 1) AS last_preview,
                 (SELECT sender  FROM messages WHERE thread_id = t.id ORDER BY timestamp_ms DESC LIMIT 1) AS last_sender
          FROM threads t
-         WHERE (?1 IS NULL OR t.archive_id IN (SELECT id FROM archives WHERE service = ?1))
+         WHERE (?1 IS NULL OR t.archive_id = ?1)
          ORDER BY COALESCE(t.last_message_at, 0) DESC",
     )?;
     let rows = stmt
-        .query_map(params![service], |r| {
+        .query_map(params![archive_id], |r| {
             Ok(ThreadSummaryOut {
                 id: r.get(0)?,
                 slug: r.get(1)?,
@@ -1190,16 +1249,16 @@ fn threads(conn: &Connection, service: Option<&str>) -> rusqlite::Result<Vec<Thr
 fn thread_detail(
     conn: &Connection,
     slug: &str,
-    service: Option<&str>,
+    archive_id: Option<i64>,
 ) -> rusqlite::Result<ThreadDetailOut> {
     let thread = conn
         .query_row(
             "SELECT id, slug, source, title, participants, message_count, last_message_at
              FROM threads
              WHERE slug = ?1
-               AND (?2 IS NULL OR archive_id IN (SELECT id FROM archives WHERE service = ?2))
+               AND (?2 IS NULL OR archive_id = ?2)
              LIMIT 1",
-            params![slug, service],
+            params![slug, archive_id],
             |r| {
                 Ok(ThreadSummaryOut {
                     id: r.get(0)?,
@@ -1248,12 +1307,12 @@ fn thread_detail(
     Ok(ThreadDetailOut { thread, messages })
 }
 
-fn self_sender(conn: &Connection, service: Option<&str>) -> rusqlite::Result<Option<String>> {
+fn self_sender(conn: &Connection, archive_id: Option<i64>) -> rusqlite::Result<Option<String>> {
     conn.query_row(
         "SELECT m.sender FROM messages m JOIN threads t ON t.id = m.thread_id
-         WHERE (?1 IS NULL OR t.archive_id IN (SELECT id FROM archives WHERE service = ?1))
+         WHERE (?1 IS NULL OR t.archive_id = ?1)
          GROUP BY m.sender ORDER BY COUNT(*) DESC LIMIT 1",
-        params![service],
+        params![archive_id],
         |r| r.get::<_, String>(0),
     )
     .optional()
@@ -1261,15 +1320,15 @@ fn self_sender(conn: &Connection, service: Option<&str>) -> rusqlite::Result<Opt
 
 fn profile_changes(
     conn: &Connection,
-    service: Option<&str>,
+    archive_id: Option<i64>,
 ) -> rusqlite::Result<Vec<ProfileChangeOut>> {
     let mut stmt = conn.prepare(
         "SELECT field, previous_value, new_value, changed_at FROM profile_changes
-         WHERE (?1 IS NULL OR archive_id IN (SELECT id FROM archives WHERE service = ?1))
+         WHERE (?1 IS NULL OR archive_id = ?1)
          ORDER BY changed_at DESC",
     )?;
     let rows = stmt
-        .query_map(params![service], |r| {
+        .query_map(params![archive_id], |r| {
             Ok(ProfileChangeOut {
                 field: r.get(0)?,
                 previous_value: r.get(1)?,
@@ -1281,12 +1340,14 @@ fn profile_changes(
     Ok(rows)
 }
 
-fn stories(conn: &Connection) -> rusqlite::Result<Vec<StoryOut>> {
+fn stories(conn: &Connection, archive_id: Option<i64>) -> rusqlite::Result<Vec<StoryOut>> {
     let mut stmt = conn.prepare(
-        "SELECT uri, created_at, title, source_app FROM stories ORDER BY created_at DESC",
+        "SELECT uri, created_at, title, source_app FROM stories
+         WHERE (?1 IS NULL OR archive_id = ?1)
+         ORDER BY created_at DESC",
     )?;
     let rows = stmt
-        .query_map([], |r| {
+        .query_map(params![archive_id], |r| {
             Ok(StoryOut {
                 uri: r.get(0)?,
                 created_at: r.get(1)?,
@@ -1298,14 +1359,16 @@ fn stories(conn: &Connection) -> rusqlite::Result<Vec<StoryOut>> {
     Ok(rows)
 }
 
-fn reposts(conn: &Connection) -> rusqlite::Result<Vec<RepostOut>> {
+fn reposts(conn: &Connection, archive_id: Option<i64>) -> rusqlite::Result<Vec<RepostOut>> {
     let mut stmt = conn.prepare(
         "SELECT id, reposted_at, user_text, source_url, source_caption,
                 source_owner_name, source_owner_username, download_status, local_path, thumb_path
-         FROM reposts ORDER BY reposted_at DESC",
+         FROM reposts
+         WHERE (?1 IS NULL OR archive_id = ?1)
+         ORDER BY reposted_at DESC",
     )?;
     let rows = stmt
-        .query_map([], |r| {
+        .query_map(params![archive_id], |r| {
             Ok(RepostOut {
                 id: r.get(0)?,
                 reposted_at: r.get(1)?,
@@ -1323,11 +1386,14 @@ fn reposts(conn: &Connection) -> rusqlite::Result<Vec<RepostOut>> {
     Ok(rows)
 }
 
-fn own_posts(conn: &Connection) -> rusqlite::Result<Vec<OwnPostOut>> {
-    let mut stmt =
-        conn.prepare("SELECT uri, media_id, ext, size_bytes FROM own_posts ORDER BY media_id")?;
+fn own_posts(conn: &Connection, archive_id: Option<i64>) -> rusqlite::Result<Vec<OwnPostOut>> {
+    let mut stmt = conn.prepare(
+        "SELECT uri, media_id, ext, size_bytes FROM own_posts
+         WHERE (?1 IS NULL OR archive_id = ?1)
+         ORDER BY media_id",
+    )?;
     let rows = stmt
-        .query_map([], |r| {
+        .query_map(params![archive_id], |r| {
             Ok(OwnPostOut {
                 uri: r.get(0)?,
                 media_id: r.get(1)?,
@@ -1339,14 +1405,14 @@ fn own_posts(conn: &Connection) -> rusqlite::Result<Vec<OwnPostOut>> {
     Ok(rows)
 }
 
-fn posts(conn: &Connection, service: Option<&str>) -> rusqlite::Result<Vec<PostOut>> {
+fn posts(conn: &Connection, archive_id: Option<i64>) -> rusqlite::Result<Vec<PostOut>> {
     let mut stmt = conn.prepare(
         "SELECT id, created_at, text, title, media, links FROM posts
-         WHERE (?1 IS NULL OR archive_id IN (SELECT id FROM archives WHERE service = ?1))
+         WHERE (?1 IS NULL OR archive_id = ?1)
          ORDER BY created_at DESC, id DESC",
     )?;
     let rows = stmt
-        .query_map(params![service], |r| {
+        .query_map(params![archive_id], |r| {
             Ok(PostOut {
                 id: r.get(0)?,
                 created_at: r.get(1)?,
@@ -1360,14 +1426,14 @@ fn posts(conn: &Connection, service: Option<&str>) -> rusqlite::Result<Vec<PostO
     Ok(rows)
 }
 
-fn albums(conn: &Connection, service: Option<&str>) -> rusqlite::Result<Vec<AlbumOut>> {
+fn albums(conn: &Connection, archive_id: Option<i64>) -> rusqlite::Result<Vec<AlbumOut>> {
     let mut stmt = conn.prepare(
         "SELECT id, name, description, cover_photo_uri, last_modified, photo_count, photos FROM albums
-         WHERE (?1 IS NULL OR archive_id IN (SELECT id FROM archives WHERE service = ?1))
+         WHERE (?1 IS NULL OR archive_id = ?1)
          ORDER BY last_modified DESC, id DESC",
     )?;
     let rows = stmt
-        .query_map(params![service], |r| {
+        .query_map(params![archive_id], |r| {
             Ok(AlbumOut {
                 id: r.get(0)?,
                 name: r.get(1)?,
@@ -1382,14 +1448,14 @@ fn albums(conn: &Connection, service: Option<&str>) -> rusqlite::Result<Vec<Albu
     Ok(rows)
 }
 
-fn connections(conn: &Connection, service: Option<&str>) -> rusqlite::Result<Vec<ConnectionOut>> {
+fn connections(conn: &Connection, archive_id: Option<i64>) -> rusqlite::Result<Vec<ConnectionOut>> {
     let mut stmt = conn.prepare(
         "SELECT kind, username, href, followed_at FROM connections
-         WHERE (?1 IS NULL OR archive_id IN (SELECT id FROM archives WHERE service = ?1))
+         WHERE (?1 IS NULL OR archive_id = ?1)
          ORDER BY username COLLATE NOCASE",
     )?;
     let rows = stmt
-        .query_map(params![service], |r| {
+        .query_map(params![archive_id], |r| {
             Ok(ConnectionOut {
                 kind: r.get(0)?,
                 username: r.get(1)?,
@@ -1402,8 +1468,8 @@ fn connections(conn: &Connection, service: Option<&str>) -> rusqlite::Result<Vec
 }
 
 // Shares scope by the message's thread's archive; saved stats by archive — same
-// `?1 IS NULL OR …` guard as the other content queries (None = all services).
-fn share_rows(conn: &Connection, service: Option<&str>) -> rusqlite::Result<Vec<ShareRowOut>> {
+// `?1 IS NULL OR …` guard as the other content queries (None = all accounts).
+fn share_rows(conn: &Connection, archive_id: Option<i64>) -> rusqlite::Result<Vec<ShareRowOut>> {
     let mut stmt = conn.prepare(
         "SELECT m.id AS id,
                 json_extract(m.media, '$.share.link') AS link,
@@ -1412,11 +1478,10 @@ fn share_rows(conn: &Connection, service: Option<&str>) -> rusqlite::Result<Vec<
          LEFT JOIN message_downloads d ON d.message_id = m.id
          WHERE json_extract(m.media, '$.share.link') IS NOT NULL
            AND (?1 IS NULL OR m.thread_id IN
-                (SELECT id FROM threads WHERE archive_id IN
-                   (SELECT id FROM archives WHERE service = ?1)))",
+                (SELECT id FROM threads WHERE archive_id = ?1))",
     )?;
     let rows = stmt
-        .query_map(params![service], |r| {
+        .query_map(params![archive_id], |r| {
             Ok(ShareRowOut {
                 id: r.get(0)?,
                 link: r.get(1)?,
@@ -1429,15 +1494,15 @@ fn share_rows(conn: &Connection, service: Option<&str>) -> rusqlite::Result<Vec<
 
 fn saved_download_stats(
     conn: &Connection,
-    service: Option<&str>,
+    archive_id: Option<i64>,
 ) -> rusqlite::Result<SavedDownloadStatsOut> {
     conn.query_row(
         "SELECT COUNT(*) AS total,
                 COALESCE(SUM(CASE WHEN download_status = 'downloaded' THEN 1 ELSE 0 END), 0) AS downloaded,
                 COALESCE(SUM(CASE WHEN download_status IN ('dead','login_walled') THEN 1 ELSE 0 END), 0) AS unavailable
          FROM saved_items
-         WHERE (?1 IS NULL OR archive_id IN (SELECT id FROM archives WHERE service = ?1))",
-        params![service],
+         WHERE (?1 IS NULL OR archive_id = ?1)",
+        params![archive_id],
         |r| {
             Ok(SavedDownloadStatsOut {
                 total: r.get(0)?,
@@ -1468,7 +1533,7 @@ fn fts_match_query(q: &str) -> Option<String> {
 fn search(
     conn: &Connection,
     q: &str,
-    service: Option<&str>,
+    archive_id: Option<i64>,
 ) -> rusqlite::Result<Vec<SearchResultOut>> {
     const PER_SOURCE: i64 = 25;
     let Some(m) = fts_match_query(q) else {
@@ -1481,10 +1546,10 @@ fn search(
         "SELECT si.caption, si.saved_at
          FROM saved_items_fts JOIN saved_items si ON si.id = saved_items_fts.rowid
          WHERE saved_items_fts MATCH ?2
-           AND (?1 IS NULL OR si.archive_id IN (SELECT id FROM archives WHERE service = ?1))
+           AND (?1 IS NULL OR si.archive_id = ?1)
          ORDER BY rank LIMIT ?3",
     )?;
-    let rows = stmt.query_map(params![service, m, PER_SOURCE], |r| {
+    let rows = stmt.query_map(params![archive_id, m, PER_SOURCE], |r| {
         Ok(SearchResultOut {
             kind: "saved".into(),
             title: String::new(),
@@ -1503,10 +1568,10 @@ fn search(
         "SELECT t.slug, t.title, t.participants, m.content, m.timestamp_ms
          FROM messages_fts JOIN messages m ON m.id = messages_fts.rowid JOIN threads t ON t.id = m.thread_id
          WHERE messages_fts MATCH ?2
-           AND (?1 IS NULL OR t.archive_id IN (SELECT id FROM archives WHERE service = ?1))
+           AND (?1 IS NULL OR t.archive_id = ?1)
          ORDER BY rank LIMIT ?3",
     )?;
-    let rows = stmt.query_map(params![service, m, PER_SOURCE], |r| {
+    let rows = stmt.query_map(params![archive_id, m, PER_SOURCE], |r| {
         Ok(SearchResultOut {
             kind: "message".into(),
             title: r.get::<_, String>(1)?,
@@ -1525,10 +1590,10 @@ fn search(
         "SELECT r.source_caption, r.user_text, r.reposted_at
          FROM reposts_fts JOIN reposts r ON r.id = reposts_fts.rowid
          WHERE reposts_fts MATCH ?2
-           AND (?1 IS NULL OR r.archive_id IN (SELECT id FROM archives WHERE service = ?1))
+           AND (?1 IS NULL OR r.archive_id = ?1)
          ORDER BY rank LIMIT ?3",
     )?;
-    let rows = stmt.query_map(params![service, m, PER_SOURCE], |r| {
+    let rows = stmt.query_map(params![archive_id, m, PER_SOURCE], |r| {
         let caption: String = r.get(0)?;
         let note: String = r.get(1)?;
         Ok(SearchResultOut {
@@ -1590,152 +1655,159 @@ pub fn query_avatars(state: State<Db>, service: Option<String>) -> Result<Vec<Av
 }
 
 #[tauri::command]
-pub fn query_overview(state: State<Db>, service: Option<String>) -> Result<Overview, String> {
+pub fn query_overview(state: State<Db>, archive_id: Option<i64>) -> Result<Overview, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    overview(&conn, service.as_deref()).map_err(|e| e.to_string())
+    overview(&conn, archive_id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub fn query_profile(
     state: State<Db>,
-    service: Option<String>,
+    archive_id: Option<i64>,
 ) -> Result<Option<ProfileOut>, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    profile(&conn, service.as_deref()).map_err(|e| e.to_string())
+    profile(&conn, archive_id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub fn query_saved_items(
     state: State<Db>,
+    archive_id: Option<i64>,
     collection: Option<String>,
 ) -> Result<Vec<SavedItemOut>, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    saved_items(&conn, collection.as_deref()).map_err(|e| e.to_string())
+    saved_items(&conn, archive_id, collection.as_deref()).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub fn query_collections(state: State<Db>) -> Result<Vec<CollectionCountOut>, String> {
-    let conn = state.0.lock().map_err(|e| e.to_string())?;
-    collections(&conn).map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-pub fn query_latest_archive(
+pub fn query_collections(
     state: State<Db>,
-    service: Option<String>,
-) -> Result<Option<ArchiveOut>, String> {
+    archive_id: Option<i64>,
+) -> Result<Vec<CollectionCountOut>, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    latest_archive(&conn, service.as_deref()).map_err(|e| e.to_string())
+    collections(&conn, archive_id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub fn query_services(state: State<Db>) -> Result<Vec<String>, String> {
+pub fn query_archives(state: State<Db>) -> Result<Vec<ArchiveListItem>, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    services(&conn).map_err(|e| e.to_string())
+    archives_list(&conn).map_err(|e| e.to_string())
+}
+
+/// Remove an imported archive (account) and all of its content from the index.
+#[tauri::command]
+pub fn delete_archive(state: State<Db>, archive_id: i64) -> Result<(), String> {
+    let mut conn = state.0.lock().map_err(|e| e.to_string())?;
+    let tx = conn.transaction().map_err(|e| e.to_string())?;
+    delete_archive_rows(&tx, archive_id).map_err(|e| e.to_string())?;
+    tx.commit().map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub fn query_threads(
     state: State<Db>,
-    service: Option<String>,
+    archive_id: Option<i64>,
 ) -> Result<Vec<ThreadSummaryOut>, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    threads(&conn, service.as_deref()).map_err(|e| e.to_string())
+    threads(&conn, archive_id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub fn query_thread_detail(
     state: State<Db>,
     slug: String,
-    service: Option<String>,
+    archive_id: Option<i64>,
 ) -> Result<ThreadDetailOut, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    thread_detail(&conn, &slug, service.as_deref()).map_err(|e| e.to_string())
+    thread_detail(&conn, &slug, archive_id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub fn query_self_sender(
     state: State<Db>,
-    service: Option<String>,
+    archive_id: Option<i64>,
 ) -> Result<Option<String>, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    self_sender(&conn, service.as_deref()).map_err(|e| e.to_string())
+    self_sender(&conn, archive_id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub fn query_profile_changes(
     state: State<Db>,
-    service: Option<String>,
+    archive_id: Option<i64>,
 ) -> Result<Vec<ProfileChangeOut>, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    profile_changes(&conn, service.as_deref()).map_err(|e| e.to_string())
+    profile_changes(&conn, archive_id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub fn query_stories(state: State<Db>) -> Result<Vec<StoryOut>, String> {
+pub fn query_stories(state: State<Db>, archive_id: Option<i64>) -> Result<Vec<StoryOut>, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    stories(&conn).map_err(|e| e.to_string())
+    stories(&conn, archive_id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub fn query_reposts(state: State<Db>) -> Result<Vec<RepostOut>, String> {
+pub fn query_reposts(state: State<Db>, archive_id: Option<i64>) -> Result<Vec<RepostOut>, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    reposts(&conn).map_err(|e| e.to_string())
+    reposts(&conn, archive_id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub fn query_own_posts(state: State<Db>) -> Result<Vec<OwnPostOut>, String> {
+pub fn query_own_posts(
+    state: State<Db>,
+    archive_id: Option<i64>,
+) -> Result<Vec<OwnPostOut>, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    own_posts(&conn).map_err(|e| e.to_string())
+    own_posts(&conn, archive_id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub fn query_posts(state: State<Db>, service: Option<String>) -> Result<Vec<PostOut>, String> {
+pub fn query_posts(state: State<Db>, archive_id: Option<i64>) -> Result<Vec<PostOut>, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    posts(&conn, service.as_deref()).map_err(|e| e.to_string())
+    posts(&conn, archive_id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub fn query_albums(state: State<Db>, service: Option<String>) -> Result<Vec<AlbumOut>, String> {
+pub fn query_albums(state: State<Db>, archive_id: Option<i64>) -> Result<Vec<AlbumOut>, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    albums(&conn, service.as_deref()).map_err(|e| e.to_string())
+    albums(&conn, archive_id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub fn query_connections(
     state: State<Db>,
-    service: Option<String>,
+    archive_id: Option<i64>,
 ) -> Result<Vec<ConnectionOut>, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    connections(&conn, service.as_deref()).map_err(|e| e.to_string())
+    connections(&conn, archive_id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub fn query_share_rows(
     state: State<Db>,
-    service: Option<String>,
+    archive_id: Option<i64>,
 ) -> Result<Vec<ShareRowOut>, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    share_rows(&conn, service.as_deref()).map_err(|e| e.to_string())
+    share_rows(&conn, archive_id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub fn query_saved_download_stats(
     state: State<Db>,
-    service: Option<String>,
+    archive_id: Option<i64>,
 ) -> Result<SavedDownloadStatsOut, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    saved_download_stats(&conn, service.as_deref()).map_err(|e| e.to_string())
+    saved_download_stats(&conn, archive_id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub fn query_search(
     state: State<Db>,
     query: String,
-    service: Option<String>,
+    archive_id: Option<i64>,
 ) -> Result<Vec<SearchResultOut>, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    search(&conn, &query, service.as_deref()).map_err(|e| e.to_string())
+    search(&conn, &query, archive_id).map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -1838,9 +1910,12 @@ mod tests {
             .expect("a message hit");
         assert_eq!(hit.slug.as_deref(), Some("x"));
 
-        // Service scoping: a different service returns nothing; the right one does.
-        assert!(search(&conn, "salut", Some("facebook")).unwrap().is_empty());
-        assert!(!search(&conn, "salut", Some("instagram")).unwrap().is_empty());
+        // Account scoping: a different archive returns nothing; the right one does.
+        let ig_id: i64 = conn
+            .query_row("SELECT id FROM archives", [], |r| r.get(0))
+            .unwrap();
+        assert!(search(&conn, "salut", Some(ig_id + 1)).unwrap().is_empty());
+        assert!(!search(&conn, "salut", Some(ig_id)).unwrap().is_empty());
 
         // Empty / whitespace query is a no-op (no FTS syntax error).
         assert!(search(&conn, "   ", None).unwrap().is_empty());
@@ -2451,7 +2526,7 @@ mod tests {
     }
 
     #[test]
-    fn service_scoped_queries_isolate_each_service() {
+    fn archive_scoped_queries_isolate_each_account() {
         // A minimal all-empty payload; each test case fills only what it asserts on.
         fn base(source_path: &str, service: &str) -> IngestPayload {
             IngestPayload {
@@ -2557,46 +2632,156 @@ mod tests {
         }];
         ingest_into(&mut conn, &fb).unwrap();
 
-        // services(): both present, most-recently-ingested (FB) first.
-        assert_eq!(
-            services(&conn).unwrap(),
-            vec!["facebook".to_string(), "instagram".to_string()]
-        );
+        let ig_id: i64 = conn
+            .query_row("SELECT id FROM archives WHERE service = 'instagram'", [], |r| r.get(0))
+            .unwrap();
+        let fb_id: i64 = conn
+            .query_row("SELECT id FROM archives WHERE service = 'facebook'", [], |r| r.get(0))
+            .unwrap();
 
-        // Overview scoped per service; `archives` stays a global count.
-        let ig_ov = overview(&conn, Some("instagram")).unwrap();
+        // archives_list(): both present, most-recently-ingested (FB) first.
+        let list = archives_list(&conn).unwrap();
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[0].service, "facebook");
+        assert_eq!(list[1].service, "instagram");
+
+        // Overview scoped per account; `archives` stays a global count.
+        let ig_ov = overview(&conn, Some(ig_id)).unwrap();
         assert_eq!((ig_ov.saved_items, ig_ov.posts, ig_ov.albums, ig_ov.threads), (1, 0, 0, 1));
-        assert_eq!(ig_ov.archives, 2, "archives count is global, not per-service");
-        let fb_ov = overview(&conn, Some("facebook")).unwrap();
+        assert_eq!(ig_ov.archives, 2, "archives count is global, not per-account");
+        let fb_ov = overview(&conn, Some(fb_id)).unwrap();
         assert_eq!((fb_ov.saved_items, fb_ov.posts, fb_ov.albums, fb_ov.threads), (0, 1, 1, 1));
         let all_ov = overview(&conn, None).unwrap();
         assert_eq!((all_ov.threads, all_ov.saved_items, all_ov.posts), (2, 1, 1));
 
-        // Profile / threads / connections / self_sender resolve to the active service.
-        assert_eq!(profile(&conn, Some("instagram")).unwrap().unwrap().username, "example_user");
+        // Profile / threads / connections / self_sender resolve to the active account.
+        assert_eq!(profile(&conn, Some(ig_id)).unwrap().unwrap().username, "example_user");
         assert_eq!(
-            profile(&conn, Some("facebook")).unwrap().unwrap().display_name,
+            profile(&conn, Some(fb_id)).unwrap().unwrap().display_name,
             "Alex Rivera"
         );
-        assert_eq!(threads(&conn, Some("instagram")).unwrap()[0].slug, "ig-a");
-        assert_eq!(threads(&conn, Some("facebook")).unwrap()[0].slug, "fb-9");
-        assert_eq!(connections(&conn, Some("facebook")).unwrap()[0].username, "Marie");
-        assert_eq!(self_sender(&conn, Some("instagram")).unwrap().as_deref(), Some("Example"));
-        assert_eq!(self_sender(&conn, Some("facebook")).unwrap().as_deref(), Some("Alex"));
+        assert_eq!(threads(&conn, Some(ig_id)).unwrap()[0].slug, "ig-a");
+        assert_eq!(threads(&conn, Some(fb_id)).unwrap()[0].slug, "fb-9");
+        assert_eq!(connections(&conn, Some(fb_id)).unwrap()[0].username, "Marie");
+        assert_eq!(self_sender(&conn, Some(ig_id)).unwrap().as_deref(), Some("Example"));
+        assert_eq!(self_sender(&conn, Some(fb_id)).unwrap().as_deref(), Some("Alex"));
 
-        // thread_detail is service-scoped: an IG slug won't resolve under facebook.
-        assert!(thread_detail(&conn, "ig-a", Some("facebook")).unwrap().thread.is_none());
-        assert!(thread_detail(&conn, "ig-a", Some("instagram")).unwrap().thread.is_some());
+        // thread_detail is archive-scoped: an IG slug won't resolve under the FB account.
+        assert!(thread_detail(&conn, "ig-a", Some(fb_id)).unwrap().thread.is_none());
+        assert!(thread_detail(&conn, "ig-a", Some(ig_id)).unwrap().thread.is_some());
 
-        // Download-stats queries scope by service too: shares by the message's
+        // Download-stats queries scope by account too: shares by the message's
         // thread's archive, saved by archive. Each thread carries one share link;
         // only IG has a saved item.
         assert_eq!(share_rows(&conn, None).unwrap().len(), 2);
-        assert_eq!(share_rows(&conn, Some("instagram")).unwrap().len(), 1);
-        assert_eq!(share_rows(&conn, Some("facebook")).unwrap().len(), 1);
+        assert_eq!(share_rows(&conn, Some(ig_id)).unwrap().len(), 1);
+        assert_eq!(share_rows(&conn, Some(fb_id)).unwrap().len(), 1);
         assert_eq!(saved_download_stats(&conn, None).unwrap().total, 1);
-        assert_eq!(saved_download_stats(&conn, Some("instagram")).unwrap().total, 1);
-        assert_eq!(saved_download_stats(&conn, Some("facebook")).unwrap().total, 0);
+        assert_eq!(saved_download_stats(&conn, Some(ig_id)).unwrap().total, 1);
+        assert_eq!(saved_download_stats(&conn, Some(fb_id)).unwrap().total, 0);
+    }
+
+    #[test]
+    fn two_instagram_imports_stay_isolated_and_deletable() {
+        // The regression this feature fixes: before per-archive scoping, two
+        // Instagram archives merged under service='instagram'. Each import must now
+        // be a separate, independently-removable account.
+        let mut conn = open(":memory:").unwrap();
+        let mk = |source: &str, username: &str, saved_url: &str, slug: &str| IngestPayload {
+            source_path: source.into(),
+            service: "instagram".into(),
+            part_paths: vec![source.into()],
+            profile: Some(ProfileRow {
+                username: username.into(),
+                display_name: username.into(),
+                email: None,
+                phone: None,
+                gender: None,
+                date_of_birth: None,
+                is_private: false,
+                country_code: None,
+                fbid: None,
+                profile_photo_uri: None,
+                profile_photo_taken_at: None,
+                first_story_at: None,
+                last_story_at: None,
+                last_login_at: None,
+                last_logout_at: None,
+                has_archived_reels: None,
+                current_city: None,
+                hometown: None,
+                relationship_status: None,
+            }),
+            profile_changes: vec![],
+            saved_items: vec![SavedItemRow {
+                url: saved_url.into(),
+                caption: "c".into(),
+                saved_at: 1,
+                collection_names: "[]".into(),
+            }],
+            saved_collections: vec![],
+            threads: vec![ThreadRow {
+                thread_path: format!("inbox/{slug}"),
+                source: "inbox".into(),
+                slug: slug.into(),
+                title: "T".into(),
+                participants: "[]".into(),
+                is_still_participant: true,
+                messages: vec![MessageRow {
+                    sender: username.into(),
+                    timestamp_ms: 1,
+                    content: "hi".into(),
+                    reactions: "[]".into(),
+                    media: "{}".into(),
+                }],
+            }],
+            stories: vec![],
+            reposts: vec![],
+            own_posts: vec![],
+            connections: vec![],
+            posts: vec![],
+            albums: vec![],
+        };
+
+        ingest_into(&mut conn, &mk("personal.zip", "personal_user", "https://insta/p/1", "t-a"))
+            .unwrap();
+        ingest_into(&mut conn, &mk("finsta.zip", "finsta_user", "https://insta/p/2", "t-b"))
+            .unwrap();
+
+        let list = archives_list(&conn).unwrap();
+        assert_eq!(list.len(), 2, "two separate Instagram imports coexist");
+        let personal = list
+            .iter()
+            .find(|a| a.username.as_deref() == Some("personal_user"))
+            .unwrap()
+            .id;
+        let finsta = list
+            .iter()
+            .find(|a| a.username.as_deref() == Some("finsta_user"))
+            .unwrap()
+            .id;
+
+        // Content is isolated per account — no merge across the two IG imports.
+        let personal_saved = saved_items(&conn, Some(personal), None).unwrap();
+        assert_eq!(personal_saved.len(), 1);
+        assert_eq!(personal_saved[0].url, "https://insta/p/1");
+        assert_eq!(saved_items(&conn, Some(finsta), None).unwrap()[0].url, "https://insta/p/2");
+        assert_eq!(threads(&conn, Some(personal)).unwrap()[0].slug, "t-a");
+        assert_eq!(threads(&conn, Some(finsta)).unwrap()[0].slug, "t-b");
+        assert_eq!(profile(&conn, Some(personal)).unwrap().unwrap().username, "personal_user");
+        // Unscoped still sees both (the global/merged view).
+        assert_eq!(saved_items(&conn, None, None).unwrap().len(), 2);
+
+        // delete_archive removes only its import; the other survives intact, FTS too.
+        delete_archive_rows(&conn, personal).unwrap();
+        let after = archives_list(&conn).unwrap();
+        assert_eq!(after.len(), 1);
+        assert_eq!(after[0].id, finsta);
+        assert!(saved_items(&conn, Some(personal), None).unwrap().is_empty());
+        assert_eq!(saved_items(&conn, Some(finsta), None).unwrap().len(), 1);
+        assert!(threads(&conn, Some(personal)).unwrap().is_empty());
+        assert!(search(&conn, "hi", Some(personal)).unwrap().is_empty());
+        assert_eq!(search(&conn, "hi", Some(finsta)).unwrap().len(), 1);
     }
 
     // ── typed read commands (replaced db_select; closes C3) ───────────────────
@@ -2690,13 +2875,13 @@ mod tests {
         )
         .unwrap();
 
-        let all = saved_items(&conn, None).unwrap();
+        let all = saved_items(&conn, None, None).unwrap();
         assert_eq!(all.len(), 2);
         assert_eq!(all[0].url, "u2", "saved_at DESC → newest first");
         assert_eq!(all[0].download_status, "none", "default status surfaces");
         assert!(all[0].local_path.is_none());
 
-        let travel = saved_items(&conn, Some("travel")).unwrap();
+        let travel = saved_items(&conn, None, Some("travel")).unwrap();
         assert_eq!(travel.len(), 1, "json_each collection filter");
         assert_eq!(travel[0].url, "u1");
     }

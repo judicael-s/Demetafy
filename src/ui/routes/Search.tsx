@@ -41,9 +41,9 @@ export default function Search(): JSX.Element {
   };
 
   const [results] = createResource(
-    () => ({ q: query(), svc: app.activeService() }),
-    ({ q, svc }) =>
-      q.trim() ? fetchSearch(q, svc ?? undefined) : Promise.resolve([] as SearchResult[]),
+    () => ({ q: query(), id: app.activeArchiveId() }),
+    ({ q, id }) =>
+      q.trim() ? fetchSearch(q, id ?? undefined) : Promise.resolve([] as SearchResult[]),
   );
 
   const groups = createMemo(() => {

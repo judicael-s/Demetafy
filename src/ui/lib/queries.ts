@@ -9,9 +9,9 @@ import { isDownloadableShare } from "./links";
 // columns these mappers already read, so the parse/shape logic below is
 // unchanged from when this layer called db_select.
 
-/** Per-content-type row counts for the dashboard + empty-state gate. When a
- *  `service` is passed the content counts are scoped to it (`archives` stays a
- *  global total — it only gates "has anything been imported"). */
+/** Per-content-type row counts for the dashboard + empty-state gate. When an
+ *  `archiveId` is passed the content counts are scoped to that import (`archives`
+ *  stays a global total — it only gates "has anything been imported"). */
 export interface Overview {
   archives: number;
   savedItems: number;
@@ -39,13 +39,18 @@ export interface ProfileRow {
   last_login_at: number | null;
 }
 
-export interface ArchiveRow {
-  source_path: string;
+/** One imported archive as a selectable account. `username`/`displayName` come
+ *  from the joined profile (null when an archive has no profile row). */
+export interface ArchiveAccount {
+  id: number;
   service: string;
-  ingested_at: number;
+  sourcePath: string;
+  ingestedAt: number;
+  username: string | null;
+  displayName: string | null;
 }
 
-export async function fetchOverview(service?: string): Promise<Overview> {
+export async function fetchOverview(archiveId?: number): Promise<Overview> {
   const r = await invoke<{
     archives: number;
     saved_items: number;
@@ -57,7 +62,7 @@ export async function fetchOverview(service?: string): Promise<Overview> {
     own_posts: number;
     posts: number;
     albums: number;
-  }>("query_overview", { service: service ?? null });
+  }>("query_overview", { archiveId: archiveId ?? null });
   return {
     archives: r.archives,
     savedItems: r.saved_items,
@@ -72,8 +77,8 @@ export async function fetchOverview(service?: string): Promise<Overview> {
   };
 }
 
-export async function fetchProfile(service?: string): Promise<ProfileRow | null> {
-  return await invoke<ProfileRow | null>("query_profile", { service: service ?? null });
+export async function fetchProfile(archiveId?: number): Promise<ProfileRow | null> {
+  return await invoke<ProfileRow | null>("query_profile", { archiveId: archiveId ?? null });
 }
 
 /** A full-text hit from `query_search`. `kind` drives the label + routing; for
@@ -89,8 +94,8 @@ export interface SearchResult {
   timestamp: number | null;
 }
 
-export async function fetchSearch(query: string, service?: string): Promise<SearchResult[]> {
-  return await invoke<SearchResult[]>("query_search", { query, service: service ?? null });
+export async function fetchSearch(query: string, archiveId?: number): Promise<SearchResult[]> {
+  return await invoke<SearchResult[]>("query_search", { query, archiveId: archiveId ?? null });
 }
 
 export interface SavedItem {
@@ -143,28 +148,51 @@ function parseSavedRow(r: SavedItemRaw): SavedItem {
   };
 }
 
-/** All saved items, newest first; optionally filtered to one collection (by name). */
-export async function fetchSavedItems(collection?: string): Promise<SavedItem[]> {
+/** All saved items for one import, newest first; optionally filtered to one
+ *  collection (by name). */
+export async function fetchSavedItems(
+  archiveId?: number,
+  collection?: string,
+): Promise<SavedItem[]> {
   const rows = await invoke<SavedItemRaw[]>("query_saved_items", {
+    archiveId: archiveId ?? null,
     collection: collection ?? null,
   });
   return rows.map(parseSavedRow);
 }
 
-/** Collections with their item counts, largest first. */
-export async function fetchCollections(): Promise<CollectionCount[]> {
-  const rows = await invoke<{ name: string; item_count: number }[]>("query_collections");
+/** Collections with their item counts for one import, largest first. */
+export async function fetchCollections(archiveId?: number): Promise<CollectionCount[]> {
+  const rows = await invoke<{ name: string; item_count: number }[]>("query_collections", {
+    archiveId: archiveId ?? null,
+  });
   return rows.map((r) => ({ name: r.name, itemCount: r.item_count }));
 }
 
-export async function fetchLatestArchive(service?: string): Promise<ArchiveRow | null> {
-  return await invoke<ArchiveRow | null>("query_latest_archive", { service: service ?? null });
+/** Every imported archive (account), most-recently-imported first. Drives the
+ *  account switcher and the Settings list; the active one's `id` scopes content. */
+export async function fetchArchives(): Promise<ArchiveAccount[]> {
+  const rows = await invoke<{
+    id: number;
+    service: string;
+    source_path: string;
+    ingested_at: number;
+    username: string | null;
+    display_name: string | null;
+  }[]>("query_archives");
+  return rows.map((r) => ({
+    id: r.id,
+    service: r.service,
+    sourcePath: r.source_path,
+    ingestedAt: r.ingested_at,
+    username: r.username,
+    displayName: r.display_name,
+  }));
 }
 
-/** Distinct services that have at least one archive, most-recently-imported
- *  first. Drives the IG/FB switcher and the default active service. */
-export async function fetchServices(): Promise<string[]> {
-  return await invoke<string[]>("query_services");
+/** Remove one imported archive (account) and all its content from the index. */
+export async function deleteArchive(id: number): Promise<void> {
+  await invoke("delete_archive", { archiveId: id });
 }
 
 // --- Messages (Step 11) -----------------------------------------------------
@@ -226,8 +254,8 @@ function toThreadSummary(r: ThreadSummaryRaw): ThreadSummary {
  * 24,802 messages this is a single fast round-trip (the inbox filters/sorts
  * client-side, so we fetch once).
  */
-export async function fetchThreads(service?: string): Promise<ThreadSummary[]> {
-  const rows = await invoke<ThreadSummaryRaw[]>("query_threads", { service: service ?? null });
+export async function fetchThreads(archiveId?: number): Promise<ThreadSummary[]> {
+  const rows = await invoke<ThreadSummaryRaw[]>("query_threads", { archiveId: archiveId ?? null });
   return rows.map(toThreadSummary);
 }
 
@@ -321,11 +349,11 @@ function parseMedia(json: string): MsgMedia {
 
 /** One thread by slug, with all messages oldest-first (chat order). One Rust
  *  round-trip (query_thread_detail) returns the thread row + its messages. */
-export async function fetchThread(slug: string, service?: string): Promise<ThreadDetail | null> {
+export async function fetchThread(slug: string, archiveId?: number): Promise<ThreadDetail | null> {
   const detail = await invoke<{
     thread: ThreadSummaryRaw | null;
     messages: MessageRaw[];
-  }>("query_thread_detail", { slug, service: service ?? null });
+  }>("query_thread_detail", { slug, archiveId: archiveId ?? null });
 
   if (!detail.thread) return null;
 
@@ -353,8 +381,8 @@ export async function fetchThread(slug: string, service?: string): Promise<Threa
  * the placeholder's 1,059). Data-driven rather than profile-derived because the
  * display name can change over time. Used only for bubble alignment (cosmetic).
  */
-export async function fetchSelfSender(service?: string): Promise<string | null> {
-  return await invoke<string | null>("query_self_sender", { service: service ?? null });
+export async function fetchSelfSender(archiveId?: number): Promise<string | null> {
+  return await invoke<string | null>("query_self_sender", { archiveId: archiveId ?? null });
 }
 
 // --- Stories / Reposts / Posts / Profile changes (Step 12) ------------------
@@ -367,13 +395,13 @@ export interface ProfileChange {
 }
 
 /** Profile field changes, newest first (e.g. the display-name rename). */
-export async function fetchProfileChanges(service?: string): Promise<ProfileChange[]> {
+export async function fetchProfileChanges(archiveId?: number): Promise<ProfileChange[]> {
   const rows = await invoke<{
     field: string;
     previous_value: string | null;
     new_value: string | null;
     changed_at: number;
-  }[]>("query_profile_changes", { service: service ?? null });
+  }[]>("query_profile_changes", { archiveId: archiveId ?? null });
   return rows.map((r) => ({
     field: r.field,
     previousValue: r.previous_value,
@@ -389,14 +417,14 @@ export interface Story {
   sourceApp: string | null;
 }
 
-/** Archived stories, newest first. `uri` is an archive entry path (vmedia). */
-export async function fetchStories(): Promise<Story[]> {
+/** Archived stories for one import, newest first. `uri` is an archive entry path (vmedia). */
+export async function fetchStories(archiveId?: number): Promise<Story[]> {
   const rows = await invoke<{
     uri: string;
     created_at: number;
     title: string;
     source_app: string | null;
-  }[]>("query_stories");
+  }[]>("query_stories", { archiveId: archiveId ?? null });
   return rows.map((r) => ({
     uri: r.uri,
     createdAt: r.created_at,
@@ -421,7 +449,7 @@ export interface Repost {
 
 /** Reposts (shared posts), newest first. Source media isn't in the archive —
  *  only the permalink + captured caption/owner, so these render as cards. */
-export async function fetchReposts(): Promise<Repost[]> {
+export async function fetchReposts(archiveId?: number): Promise<Repost[]> {
   const rows = await invoke<{
     id: number;
     reposted_at: number;
@@ -433,7 +461,7 @@ export async function fetchReposts(): Promise<Repost[]> {
     download_status: string;
     local_path: string | null;
     thumb_path: string | null;
-  }[]>("query_reposts");
+  }[]>("query_reposts", { archiveId: archiveId ?? null });
   return rows.map((r) => ({
     id: r.id,
     repostedAt: r.reposted_at,
@@ -552,13 +580,13 @@ export function parseFacebookAlbumPhotos(json: string): FacebookAlbumPhoto[] {
 
 /** The user's own post media recovered from the archive (Meta DYI 2026-05 omits
  *  the posts index, so these have no captions/timestamps — just media files). */
-export async function fetchOwnPosts(): Promise<OwnPost[]> {
+export async function fetchOwnPosts(archiveId?: number): Promise<OwnPost[]> {
   const rows = await invoke<{
     uri: string;
     media_id: string;
     ext: string | null;
     size_bytes: number | null;
-  }[]>("query_own_posts");
+  }[]>("query_own_posts", { archiveId: archiveId ?? null });
   return rows.map((r) => ({
     uri: r.uri,
     mediaId: r.media_id,
@@ -567,9 +595,9 @@ export async function fetchOwnPosts(): Promise<OwnPost[]> {
   }));
 }
 
-/** Facebook timeline posts, newest first. `media` entries are archive paths. */
-export async function fetchPosts(service = "facebook"): Promise<FacebookPost[]> {
-  const rows = await invoke<FacebookPostRaw[]>("query_posts", { service });
+/** Facebook timeline posts for one import, newest first. `media` entries are archive paths. */
+export async function fetchPosts(archiveId?: number): Promise<FacebookPost[]> {
+  const rows = await invoke<FacebookPostRaw[]>("query_posts", { archiveId: archiveId ?? null });
   return rows.map((r) => ({
     id: r.id,
     createdAt: r.created_at,
@@ -580,9 +608,9 @@ export async function fetchPosts(service = "facebook"): Promise<FacebookPost[]> 
   }));
 }
 
-/** Facebook photo albums, newest modified first. */
-export async function fetchAlbums(service = "facebook"): Promise<FacebookAlbum[]> {
-  const rows = await invoke<FacebookAlbumRaw[]>("query_albums", { service });
+/** Facebook photo albums for one import, newest modified first. */
+export async function fetchAlbums(archiveId?: number): Promise<FacebookAlbum[]> {
+  const rows = await invoke<FacebookAlbumRaw[]>("query_albums", { archiveId: archiveId ?? null });
   return rows.map((r) => ({
     id: r.id,
     name: r.name,
@@ -607,13 +635,13 @@ export interface Connection {
 
 /** All follower/following/etc. relationships, alphabetical by handle. The route
  *  filters by `kind` client-side (a few thousand rows; one fetch + virtualize). */
-export async function fetchConnections(service?: string): Promise<Connection[]> {
+export async function fetchConnections(archiveId?: number): Promise<Connection[]> {
   const rows = await invoke<{
     kind: string;
     username: string;
     href: string;
     followed_at: number;
-  }[]>("query_connections", { service: service ?? null });
+  }[]>("query_connections", { archiveId: archiveId ?? null });
   return rows.map((r) => ({
     kind: r.kind,
     username: r.username,
@@ -646,28 +674,28 @@ interface ShareRow {
 }
 
 /** Pull every message that carries a shared-post link, with its download status.
- *  Scoped to one service when given (None = all), so each service's completion
+ *  Scoped to one import when given (None = all), so each account's completion
  *  card counts only its own conversation shares. */
-async function fetchShareRows(service?: string): Promise<ShareRow[]> {
-  const rows = await invoke<ShareRow[]>("query_share_rows", { service: service ?? null });
+async function fetchShareRows(archiveId?: number): Promise<ShareRow[]> {
+  const rows = await invoke<ShareRow[]>("query_share_rows", { archiveId: archiveId ?? null });
   return rows.filter((r) => isDownloadableShare(r.link));
 }
 
 const UNAVAILABLE = new Set(["dead", "login_walled"]);
 
-/** Combined download progress for one service. Instagram = saved posts + DM shares;
+/** Combined download progress for one import. Instagram = saved posts + DM shares;
  *  Facebook = DM-shared reels/videos only (its saved_items table is empty, and
- *  post/album media is already offline in-zip). Omit `service` for all services. */
-export async function fetchDownloadStats(service?: string): Promise<DownloadStats> {
+ *  post/album media is already offline in-zip). Omit `archiveId` for all imports. */
+export async function fetchDownloadStats(archiveId?: number): Promise<DownloadStats> {
   const s = await invoke<{ total: number; downloaded: number; unavailable: number }>(
     "query_saved_download_stats",
-    { service: service ?? null },
+    { archiveId: archiveId ?? null },
   );
 
   let total = s.total;
   let downloaded = s.downloaded;
   let unavailable = s.unavailable;
-  for (const r of await fetchShareRows(service)) {
+  for (const r of await fetchShareRows(archiveId)) {
     total += 1;
     if (r.status === "downloaded") downloaded += 1;
     else if (UNAVAILABLE.has(r.status)) unavailable += 1;
@@ -677,11 +705,11 @@ export async function fetchDownloadStats(service?: string): Promise<DownloadStat
   return { total, downloaded, unavailable, reachable, remaining: Math.max(0, reachable - downloaded) };
 }
 
-/** Every not-yet-fetched, recoverable download for one service as queue inputs.
+/** Every not-yet-fetched, recoverable download for one import as queue inputs.
  *  Skips downloaded/dead/login_walled; includes `none` + `error` (errors retry).
- *  Saved items are Instagram-only, so they're skipped for Facebook. */
-export async function fetchDownloadTargets(service?: string): Promise<EnqueueInput[]> {
-  const saved = service === "facebook" ? [] : await fetchSavedItems();
+ *  Saved items are Instagram-only; for a Facebook import the scoped query is empty. */
+export async function fetchDownloadTargets(archiveId?: number): Promise<EnqueueInput[]> {
+  const saved = await fetchSavedItems(archiveId);
   const savedTargets: EnqueueInput[] = saved
     .filter((it) => it.downloadStatus === "none" || it.downloadStatus === "error")
     .map((it) => ({

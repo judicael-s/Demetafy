@@ -39,13 +39,13 @@ export default function Connections(): JSX.Element {
   const app = useApp();
   const navigate = useNavigate();
   const [all] = createResource(
-    () => app.activeService(),
-    (svc) => fetchConnections(svc ?? undefined),
+    () => app.activeArchiveId(),
+    (id) => fetchConnections(id ?? undefined),
   );
-  // Threads for the active service, to link a connection to the chat(s) you share.
+  // Threads for the active account, to link a connection to the chat(s) you share.
   const [threads] = createResource(
-    () => app.activeService(),
-    (svc) => fetchThreads(svc ?? undefined),
+    () => app.activeArchiveId(),
+    (id) => fetchThreads(id ?? undefined),
   );
   // Cached IG avatars (handle → media path), opt-in feature; empty for Facebook.
   const [avatarMap, { refetch: refetchAvatars }] = createResource(
