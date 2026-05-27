@@ -1,0 +1,33 @@
+[package]
+name = "demetafy-app"
+version = "0.1.0"
+description = "Demetafy — privacy-first desktop archive viewer for Meta DYI exports"
+authors = ["Judicael <jules.sauvajol@gmail.com>", "Demetafy"]
+license = "AGPL-3.0-or-later"
+repository = "https://github.com/judicael-s/Demetafy"
+edition = "2021"
+rust-version = "1.77.2"
+
+[lib]
+name = "demetafy_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.6.2", features = [] }
+
+[dependencies]
+serde_json = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+log = "0.4"
+tauri = { version = "2.11.2", features = [] }
+tauri-plugin-log = "2"
+tauri-plugin-shell = "2"
+tauri-plugin-dialog = "2"
+rusqlite = { version = "0.39.0", features = ["bundled"] }
+zip = "4.2.0"
+# Download-engine backoff (`tokio::time::sleep`). Already pulled in transitively
+# by tauri; named here only so the engine can use the `time` driver directly.
+tokio = { version = "1", features = ["time"] }
+# Opt-in IG avatar fetch ONLY (the one network feature). Sync HTTP client so the
+# throttled worker can block on a spawned thread; default features include rustls TLS.
+ureq = "2"

@@ -1,0 +1,41 @@
+#!/bin/sh
+# Pre-commit guard for this PUBLIC repo: block secrets, credentials, and real
+# personal data from ever entering history. Enable once per clone:
+#     git config core.hooksPath .githooks
+# A local-only, gitignored blocklist (.githooks/blocklist.local) can add
+# project-specific terms without naming them in public history. See CONTRIBUTING.md.
+
+fail() {
+  echo "pre-commit BLOCKED: $1" >&2
+  echo "Real archives / cookies / secrets must never be committed to this public repo." >&2
+  echo "(Genuine false positive? 'git commit --no-verify' overrides — be certain.)" >&2
+  exit 1
+}
+
+files=$(git diff --cached --name-only --diff-filter=ACM)
+# Added lines only, excluding this hook dir so the patterns below don't self-trigger.
+added=$(git diff --cached --no-color -U0 -- . ':(exclude).githooks/**' | grep '^+' | grep -v '^+++')
+
+# 1. Real archive / media / cookie files (these belong only in gitignored data/)
+if printf '%s\n' "$files" | grep -qiE '(^|/)data/'; then fail "a path under data/ is staged"; fi
+if printf '%s\n' "$files" | grep -qiE '\.(zip|mp4|mov|webm|m4a)$'; then fail "an archive/media binary is staged"; fi
+if printf '%s\n' "$files" | grep -qiE 'cookies?[^/]*\.txt$'; then fail "a cookies file is staged"; fi
+
+# 2. Credentials / secrets in added lines
+if printf '%s\n' "$added" | grep -qE -- '-----BEGIN [A-Z ]*PRIVATE KEY-----'; then fail "private key material"; fi
+if printf '%s\n' "$added" | grep -qiE '(sessionid|csrftoken|ds_user_id)[[:space:]]*[=:]'; then fail "a session/cookie value"; fi
+if printf '%s\n' "$added" | grep -qF 'Netscape HTTP Cookie File'; then fail "a cookie jar"; fi
+if printf '%s\n' "$added" | grep -qE '(gh[pousr]_[A-Za-z0-9]{30,}|xox[baprs]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16})'; then fail "an API token / access key"; fi
+if printf '%s\n' "$added" | grep -qiE 'authorization:[[:space:]]*bearer[[:space:]]+[A-Za-z0-9._-]{20,}'; then fail "a Bearer token"; fi
+
+# 3. Project-specific terms from the local (gitignored) blocklist, if present
+bl=".githooks/blocklist.local"
+if [ -f "$bl" ]; then
+  while IFS= read -r term; do
+    [ -z "$term" ] && continue
+    case "$term" in \#*) continue ;; esac
+    if printf '%s\n' "$added" | grep -qiF -- "$term"; then fail "a blocked term (see $bl)"; fi
+  done < "$bl"
+fi
+
+exit 0

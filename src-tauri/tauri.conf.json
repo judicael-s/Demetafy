@@ -1,0 +1,43 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "productName": "Demetafy",
+  "version": "0.1.0",
+  "identifier": "com.demetafy.app",
+  "build": {
+    "frontendDist": "../dist/ui",
+    "devUrl": "http://localhost:5173",
+    "beforeDevCommand": "pnpm dev:ui",
+    "beforeBuildCommand": "pnpm build:ui"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Demetafy",
+        "width": 1280,
+        "height": 800,
+        "minWidth": 960,
+        "minHeight": 600,
+        "resizable": true,
+        "fullscreen": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self' ipc: http://ipc.localhost; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: data: blob: vmedia: http://vmedia.localhost dmedia: http://dmedia.localhost; media-src 'self' asset: blob: vmedia: http://vmedia.localhost dmedia: http://dmedia.localhost; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "externalBin": ["binaries/yt-dlp"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "android": {
+      "debugApplicationIdSuffix": ".debug"
+    }
+  }
+}

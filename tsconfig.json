@@ -1,0 +1,24 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ES2023"],
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "outDir": "./dist/node",
+    "declaration": true,
+    "sourceMap": true
+  },
+  "include": ["src/parsers/**/*", "src/downloaders/**/*", "src/storage/**/*", "src/viewer/**/*", "bin/**/*"],
+  "exclude": ["node_modules", "dist", "data", "coverage", "src/ui", "src-tauri"]
+}

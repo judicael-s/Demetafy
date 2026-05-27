@@ -1,0 +1,40 @@
+# Personal data — never commit. Contains Meta DYI archives and extracted media.
+data/
+
+# Node / TypeScript build artifacts
+node_modules/
+dist/
+*.tsbuildinfo
+coverage/
+
+# Tauri / Rust build artifacts
+src-tauri/target/
+src-tauri/gen/
+# src-tauri/Cargo.lock is committed: this is an app, so we lock exact dep versions.
+
+# Bundled yt-dlp sidecar binaries (~18MB each) — fetched/copied per-platform at
+# build time, not committed. See tasks/todo.md Step 13 and CLAUDE.md.
+src-tauri/binaries/
+
+# Logs
+*.log
+pnpm-debug.log*
+npm-debug.log*
+
+# Env files
+.env
+.env.local
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+
+# Claude Code per-user local settings (machine paths, local approvals) — never commit
+.claude/settings.local.json
+
+# Loose archives / cookies / exports — real data must never be committed (it belongs in data/)
+*.zip
+cookies*.txt
+
+# Per-user local pre-commit blocklist (see .githooks/pre-commit) — never commit
+.githooks/blocklist.local

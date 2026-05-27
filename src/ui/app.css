@@ -1,0 +1,100 @@
+@import "tailwindcss";
+
+/* Semantic theme tokens (Tailwind 4 CSS-first). Dark is the default identity;
+   [data-theme="light"] overrides the same vars so utilities like bg-surface
+   re-resolve automatically. The toggle lands in Settings (Step 9) / Step 15. */
+@theme {
+  --color-bg: #0a0a0a;
+  --color-surface: #161616;
+  --color-surface-2: #202020;
+  --color-border: #2a2a2a;
+  --color-ink: #f5f5f5;
+  --color-muted: #9aa0a6;
+  --color-accent: #962fbf;
+  --color-accent-ink: #ffffff;
+
+  --font-sans:
+    ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+}
+
+[data-theme="light"] {
+  --color-bg: #fafafa;
+  --color-surface: #ffffff;
+  --color-surface-2: #f0f0f0;
+  --color-border: #dbdbdb;
+  --color-ink: #0a0a0a;
+  --color-muted: #6b7075;
+  --color-accent: #7d2aa0;
+  --color-accent-ink: #ffffff;
+}
+
+/* Instagram brand gradient — theme-independent. Used by the window frame
+   (#app::after) and mirrored as an SVG <linearGradient> in Logo.tsx (CSS
+   gradients and SVG paint servers can't be shared, so keep the stops in sync). */
+:root {
+  --ig-gradient: linear-gradient(
+    45deg,
+    #feda75 0%,
+    #fa7e1e 25%,
+    #d62976 50%,
+    #962fbf 75%,
+    #4f5bd5 100%
+  );
+}
+
+@layer base {
+  html,
+  body {
+    height: 100%;
+  }
+  body {
+    margin: 0;
+    background-color: var(--color-bg);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+  }
+  /* Thin scrollbars that match the surface palette. */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-border) transparent;
+  }
+  /* Visible keyboard-focus ring on interactive elements (WCAG 2.4.7). Mouse
+     focus stays quiet via :focus-visible. Inputs keep their own focus:border. */
+  a:focus-visible,
+  button:focus-visible,
+  select:focus-visible,
+  [tabindex]:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+    border-radius: 6px;
+  }
+  /* 1px Instagram-gradient hairline framing the whole window. Drawn as an
+     overlay ring — gradient fill, then a mask punches out the interior leaving
+     only the 1px padding edge — so it adds no layout box and never intercepts
+     clicks. Sits above all routes and overlays. Covers loading/onboarding/ready. */
+  #app::after {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+    pointer-events: none;
+    padding: 1px;
+    background: var(--ig-gradient);
+    -webkit-mask:
+      linear-gradient(#fff 0 0) content-box,
+      linear-gradient(#fff 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+  }
+}
+
+@layer components {
+  /* Primary CTA buttons wear the full Instagram gradient (matches the logo).
+     Pair with text-accent-ink for legible white text. Flat accents — progress
+     bars, active tabs, chat bubbles, focus rings — stay solid via --color-accent. */
+  .btn-brand {
+    background-image: var(--ig-gradient);
+  }
+}
