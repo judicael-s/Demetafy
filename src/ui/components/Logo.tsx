@@ -1,6 +1,6 @@
 import { createUniqueId, type JSX } from "solid-js";
 
-/** Demetafy brand mark: a gradient "V" on a dark polar-grey tile with a 1px
+/** Demetafy brand mark: a gradient "D" on a dark polar-grey tile with a 1px
  *  Instagram-gradient border. Scalable SVG (also exportable to the app icon).
  *  Decorative by default — pair it with the "Demetafy" wordmark for the label.
  *  Gradient stops mirror --ig-gradient in app.css; keep them in sync. */
@@ -39,14 +39,21 @@ export function Logo(props: { size?: number; class?: string }): JSX.Element {
         stroke={`url(#${gid})`}
         stroke-width="1"
       />
-      {/* Gradient V glyph, centered, with softened corners. */}
+      {/* Gradient D glyph: outer stem+bulge with softened outer corners. The
+          right curve uses rx=10 ry=6.5 so it tops out at x=24. */}
       <path
-        d="M8 9.5 L11.7 9.5 L16 17 L20.3 9.5 L24 9.5 L16 22.5 Z"
+        d="M8 9.5 L14 9.5 A10 6.5 0 0 1 14 22.5 L8 22.5 Z"
         fill={`url(#${gid})`}
         stroke={`url(#${gid})`}
         stroke-width="1.1"
         stroke-linejoin="round"
         stroke-linecap="round"
+      />
+      {/* Counter (the hole in the D), repainted in the tile color. Inner
+          curve rx=6.5 ry=3 keeps a uniform 3.5-unit stroke around the arc. */}
+      <path
+        d="M11.5 13 L14 13 A6.5 3 0 0 1 14 19 L11.5 19 Z"
+        fill="#1b1f26"
       />
     </svg>
   );

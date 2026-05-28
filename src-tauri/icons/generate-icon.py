@@ -1,5 +1,5 @@
 """Generate the Demetafy source app icon to match the in-app brand mark
-(src/ui/components/Logo.tsx): a gradient "V" on a dark polar-grey rounded tile
+(src/ui/components/Logo.tsx): a gradient "D" on a dark polar-grey rounded tile
 with an Instagram-gradient border. Run from the repo root, then regenerate the
 platform set:
 
@@ -9,6 +9,8 @@ platform set:
 Gradient stops mirror --ig-gradient in app.css and the <linearGradient> in
 Logo.tsx; keep all three in sync.
 """
+
+import math
 
 from PIL import Image, ImageChops, ImageDraw
 
@@ -30,8 +32,26 @@ STOPS = [
     (1.00, (79, 91, 213)),    # #4f5bd5
 ]
 
-# V glyph path vertices from Logo.tsx, in its 32-unit viewBox.
-V_PTS_32 = [(8, 9.5), (11.7, 9.5), (16, 17), (20.3, 9.5), (24, 9.5), (16, 22.5)]
+# D glyph polygon points from Logo.tsx, in its 32-unit viewBox. Outer is the
+# stem + right bulge; inner is the counter we subtract from the mask. The arcs
+# from the SVG (rx=10 ry=6.5 outer, rx=6.5 ry=3 inner, centered at y=16) are
+# sampled into polylines so we can fill them with ImageDraw.polygon.
+_ARC_STEPS = 96  # smooth enough at 1024×SS without measurable seams
+
+
+def _arc(cx, cy, rx, ry, start_deg, end_deg, n=_ARC_STEPS):
+    """Polyline along an elliptical arc, inclusive of both endpoints."""
+    return [
+        (
+            cx + rx * math.cos(math.radians(start_deg + (end_deg - start_deg) * i / n)),
+            cy + ry * math.sin(math.radians(start_deg + (end_deg - start_deg) * i / n)),
+        )
+        for i in range(n + 1)
+    ]
+
+
+D_OUTER_32 = [(8, 9.5), (14, 9.5)] + _arc(14, 16, 10, 6.5, -90, 90) + [(8, 22.5)]
+D_INNER_32 = [(11.5, 13), (14, 13)] + _arc(14, 16, 6.5, 3, -90, 90) + [(11.5, 19)]
 
 
 def _color_at(t):
@@ -76,13 +96,15 @@ def main():
         width=STROKE * SS,
     )
 
-    # Gradient V glyph.
-    v = Image.new("L", (BIG, BIG), 0)
-    pts = [(x / 32 * BIG, y / 32 * BIG) for (x, y) in V_PTS_32]
-    ImageDraw.Draw(v).polygon(pts, fill=255)
+    # Gradient D glyph: fill the outer polygon, then carve the counter back
+    # out by re-filling it with 0 on the same L mask.
+    d = Image.new("L", (BIG, BIG), 0)
+    draw = ImageDraw.Draw(d)
+    draw.polygon([(x / 32 * BIG, y / 32 * BIG) for (x, y) in D_OUTER_32], fill=255)
+    draw.polygon([(x / 32 * BIG, y / 32 * BIG) for (x, y) in D_INNER_32], fill=0)
 
-    # Paint the gradient through (border ∪ V) onto the dark tile, then downscale.
-    base.paste(grad, (0, 0), ImageChops.lighter(border, v))
+    # Paint the gradient through (border ∪ D) onto the dark tile, then downscale.
+    base.paste(grad, (0, 0), ImageChops.lighter(border, d))
     base.resize((SIZE, SIZE), Image.LANCZOS).save(OUT)
     print(f"wrote {OUT} {SIZE}x{SIZE}")
 
