@@ -79,6 +79,7 @@ pub fn run() {
             db::query_share_rows,
             db::query_saved_download_stats,
             db::query_search,
+            db::query_feed,
             db::query_avatars,
             avatars::fetch_ig_avatar,
             avatars::fetch_ig_avatars,

@@ -3,6 +3,7 @@ import { Route, Router } from "@solidjs/router";
 import { AppProvider } from "./state/app";
 import { Shell } from "./components/Shell";
 import Home from "./routes/Home";
+import Feed from "./routes/Feed";
 import Saved from "./routes/Saved";
 import Dms from "./routes/Dms";
 import Thread from "./routes/Thread";
@@ -21,6 +22,7 @@ export default function App(): JSX.Element {
     <AppProvider>
       <Router root={Shell}>
         <Route path="/" component={Home} />
+        <Route path="/feed" component={Feed} />
         <Route path="/profile" component={Profile} />
         <Route path="/saved" component={() => <RequireService service="instagram"><Saved /></RequireService>} />
         <Route path="/saved/c/:slug" component={() => <RequireService service="instagram"><Saved /></RequireService>} />

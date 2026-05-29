@@ -11,7 +11,8 @@ export type IconName =
   | "albums"
   | "connections"
   | "settings"
-  | "search";
+  | "search"
+  | "feed";
 
 const PATHS: Record<IconName, JSX.Element> = {
   home: <path d="M4 12l8-8 8 8M6 10v10h12V10" />,
@@ -44,6 +45,12 @@ const PATHS: Record<IconName, JSX.Element> = {
     <>
       <circle cx="11" cy="11" r="6" />
       <path d="m20 20-3.5-3.5" />
+    </>
+  ),
+  feed: (
+    <>
+      <rect x="4" y="4" width="16" height="16" rx="3" />
+      <path d="M10.5 9.5l4.5 2.5-4.5 2.5z" />
     </>
   ),
 };

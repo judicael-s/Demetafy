@@ -16,6 +16,7 @@ interface NavItem {
 
 const NAV: NavItem[] = [
   { label: "Home", href: "/", icon: "home", end: true },
+  { label: "Feed", href: "/feed", icon: "feed" },
   { label: "Profile", href: "/profile", icon: "profile" },
   { label: "Saved", href: "/saved", icon: "saved", services: ["instagram"] },
   { label: "Messages", href: "/dms", icon: "dms" },

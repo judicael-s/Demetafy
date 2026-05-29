@@ -725,3 +725,41 @@ export async function fetchDownloadTargets(archiveId?: number): Promise<EnqueueI
 
   return [...savedTargets, ...shareTargets];
 }
+
+// --- Mixed feed (Reels) -----------------------------------------------------
+
+/** One playable media item for the mixed feed. Exactly one of `uri` (an in-zip
+ *  entry → vmedia) or `localPath` (a downloaded file → dmedia) is set. */
+export interface FeedMediaItem {
+  source: string;
+  kind: "image" | "video";
+  uri: string | null;
+  localPath: string | null;
+  posterPath: string | null;
+  caption: string | null;
+  timestampMs: number | null;
+}
+
+/** Playable media across every source for one import, newest-first and bounded by
+ *  `limit`. The route shuffles client-side; permalink sources (saved/reposts/DM
+ *  shares) only appear once downloaded. */
+export async function fetchFeed(archiveId?: number, limit?: number): Promise<FeedMediaItem[]> {
+  const rows = await invoke<{
+    source: string;
+    kind: "image" | "video";
+    uri: string | null;
+    local_path: string | null;
+    poster_path: string | null;
+    caption: string | null;
+    timestamp_ms: number | null;
+  }[]>("query_feed", { archiveId: archiveId ?? null, limit: limit ?? null });
+  return rows.map((r) => ({
+    source: r.source,
+    kind: r.kind,
+    uri: r.uri,
+    localPath: r.local_path,
+    posterPath: r.poster_path,
+    caption: r.caption,
+    timestampMs: r.timestamp_ms,
+  }));
+}

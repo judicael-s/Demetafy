@@ -997,6 +997,20 @@ pub struct SavedDownloadStatsOut {
     unavailable: i64,
 }
 
+/// One playable media item for the mixed feed. Either `uri` (an in-zip entry,
+/// served via vmedia) or `local_path` (a downloaded file, served via dmedia) is
+/// set; the frontend builds the actual URL. `source` is a short provenance label.
+#[derive(Serialize, Debug)]
+pub struct FeedItemOut {
+    source: String,
+    kind: String, // "image" | "video"
+    uri: Option<String>,
+    local_path: Option<String>,
+    poster_path: Option<String>,
+    caption: Option<String>,
+    timestamp_ms: Option<i64>,
+}
+
 #[derive(Serialize, Debug)]
 pub struct SearchResultOut {
     /// "saved" | "message" | "repost" — the UI groups + labels + routes on this.
@@ -1448,6 +1462,310 @@ fn albums(conn: &Connection, archive_id: Option<i64>) -> rusqlite::Result<Vec<Al
     Ok(rows)
 }
 
+// --- Mixed feed (Reels) -----------------------------------------------------
+// Enumerates playable media across every source into one flat list. In-zip media
+// (stories, own posts, FB posts/albums, DM photos/videos/gifs) is always available;
+// permalink sources (saved, reposts, DM shares) appear only once downloaded. Each
+// source is bounded by `LIMIT` so even a 100k-message archive does bounded work;
+// the merged list is sorted newest-first and truncated. The frontend shuffles.
+
+/// Image vs video purely from the file extension (mirrors `media::content_type`'s
+/// video set) — neither the DB nor the JSON media columns carry a type.
+fn media_kind(path: &str) -> &'static str {
+    match path.rsplit('.').next().unwrap_or("").to_ascii_lowercase().as_str() {
+        "mp4" | "m4v" | "mov" | "webm" => "video",
+        _ => "image",
+    }
+}
+
+/// Trim, drop-if-empty, and cap a caption so the feed payload stays small.
+fn clip_caption(s: &str, n: usize) -> Option<String> {
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+    if s.chars().count() <= n {
+        Some(s.to_string())
+    } else {
+        Some(s.chars().take(n).collect::<String>() + "…")
+    }
+}
+
+#[derive(Deserialize)]
+struct FeedMediaRef {
+    uri: String,
+    #[serde(rename = "createdAt")]
+    created_at: Option<i64>,
+}
+
+#[derive(Deserialize)]
+struct FeedPhotoRef {
+    uri: String,
+    #[serde(rename = "createdAt")]
+    created_at: Option<i64>,
+    title: Option<String>,
+    description: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct FeedUriRef {
+    uri: String,
+}
+
+#[derive(Deserialize, Default)]
+struct FeedMsgMedia {
+    #[serde(default)]
+    photos: Vec<FeedUriRef>,
+    #[serde(default)]
+    videos: Vec<FeedUriRef>,
+    #[serde(default)]
+    gifs: Vec<FeedUriRef>,
+}
+
+fn feed(conn: &Connection, archive_id: Option<i64>, limit: i64) -> rusqlite::Result<Vec<FeedItemOut>> {
+    let mut out: Vec<FeedItemOut> = Vec::new();
+
+    // Stories (in-zip).
+    {
+        let mut stmt = conn.prepare(
+            "SELECT uri, title, created_at FROM stories
+             WHERE (?1 IS NULL OR archive_id = ?1)
+             ORDER BY created_at DESC LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![archive_id, limit], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?))
+        })?;
+        for row in rows {
+            let (uri, title, created_at) = row?;
+            out.push(FeedItemOut {
+                source: "Story".into(),
+                kind: media_kind(&uri).into(),
+                uri: Some(uri),
+                local_path: None,
+                poster_path: None,
+                caption: clip_caption(&title, 280),
+                timestamp_ms: Some(created_at),
+            });
+        }
+    }
+
+    // Own posts (in-zip; no timestamp in the 2026-05 export).
+    {
+        let mut stmt = conn.prepare(
+            "SELECT uri FROM own_posts
+             WHERE (?1 IS NULL OR archive_id = ?1)
+             ORDER BY media_id LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![archive_id, limit], |r| r.get::<_, String>(0))?;
+        for row in rows {
+            let uri = row?;
+            out.push(FeedItemOut {
+                source: "Post".into(),
+                kind: media_kind(&uri).into(),
+                uri: Some(uri),
+                local_path: None,
+                poster_path: None,
+                caption: None,
+                timestamp_ms: None,
+            });
+        }
+    }
+
+    // Facebook posts (JSON `media` column → one item per entry).
+    {
+        let mut stmt = conn.prepare(
+            "SELECT media, text, title, created_at FROM posts
+             WHERE (?1 IS NULL OR archive_id = ?1)
+             ORDER BY created_at DESC, id DESC LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![archive_id, limit], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, i64>(3)?,
+            ))
+        })?;
+        for row in rows {
+            let (media, text, title, created_at) = row?;
+            let caption = clip_caption(&text, 280).or_else(|| clip_caption(&title, 280));
+            for m in serde_json::from_str::<Vec<FeedMediaRef>>(&media).unwrap_or_default() {
+                out.push(FeedItemOut {
+                    source: "Post".into(),
+                    kind: media_kind(&m.uri).into(),
+                    uri: Some(m.uri),
+                    local_path: None,
+                    poster_path: None,
+                    caption: caption.clone(),
+                    timestamp_ms: Some(m.created_at.unwrap_or(created_at)),
+                });
+            }
+        }
+    }
+
+    // Facebook albums (JSON `photos` column → one item per photo).
+    {
+        let mut stmt = conn.prepare(
+            "SELECT name, photos, last_modified FROM albums
+             WHERE (?1 IS NULL OR archive_id = ?1)
+             ORDER BY last_modified DESC, id DESC LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![archive_id, limit], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?))
+        })?;
+        for row in rows {
+            let (name, photos, last_modified) = row?;
+            let source = if name.trim().is_empty() {
+                "Album".to_string()
+            } else {
+                format!("Album · {name}")
+            };
+            for p in serde_json::from_str::<Vec<FeedPhotoRef>>(&photos).unwrap_or_default() {
+                let caption = p
+                    .description
+                    .as_deref()
+                    .and_then(|d| clip_caption(d, 280))
+                    .or_else(|| p.title.as_deref().and_then(|t| clip_caption(t, 280)))
+                    .or_else(|| clip_caption(&name, 280));
+                out.push(FeedItemOut {
+                    source: source.clone(),
+                    kind: media_kind(&p.uri).into(),
+                    uri: Some(p.uri),
+                    local_path: None,
+                    poster_path: None,
+                    caption,
+                    timestamp_ms: Some(p.created_at.unwrap_or(last_modified)),
+                });
+            }
+        }
+    }
+
+    // DM media: in-zip photos/videos/gifs (parsed from the JSON `media` column) plus
+    // any downloaded shared post. The `LIKE '%"uri"%'` guard skips text-only messages
+    // cheaply; downloaded shares are caught by the `local_path` clause.
+    {
+        let mut stmt = conn.prepare(
+            "SELECT m.media, m.content, m.timestamp_ms, t.title, t.participants,
+                    md.status, md.local_path, md.thumb_path
+             FROM messages m
+             JOIN threads t ON t.id = m.thread_id
+             LEFT JOIN message_downloads md ON md.message_id = m.id
+             WHERE (?1 IS NULL OR t.archive_id = ?1)
+               AND (m.media LIKE '%\"uri\"%' OR md.local_path IS NOT NULL)
+             ORDER BY m.timestamp_ms DESC LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![archive_id, limit], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, i64>(2)?,
+                r.get::<_, String>(3)?,
+                r.get::<_, String>(4)?,
+                r.get::<_, Option<String>>(5)?,
+                r.get::<_, Option<String>>(6)?,
+                r.get::<_, Option<String>>(7)?,
+            ))
+        })?;
+        for row in rows {
+            let (media, content, ts, title, participants, status, local_path, thumb_path) = row?;
+            let label = if !title.trim().is_empty() {
+                title
+            } else {
+                serde_json::from_str::<Vec<String>>(&participants)
+                    .ok()
+                    .and_then(|p| p.into_iter().next())
+                    .unwrap_or_default()
+            };
+            let source = if label.trim().is_empty() {
+                "DM".to_string()
+            } else {
+                format!("DM · {label}")
+            };
+            let caption = clip_caption(&content, 280);
+
+            let parsed: FeedMsgMedia = serde_json::from_str(&media).unwrap_or_default();
+            for v in parsed.videos {
+                out.push(FeedItemOut {
+                    source: source.clone(),
+                    kind: "video".into(),
+                    uri: Some(v.uri),
+                    local_path: None,
+                    poster_path: None,
+                    caption: caption.clone(),
+                    timestamp_ms: Some(ts),
+                });
+            }
+            for p in parsed.photos.into_iter().chain(parsed.gifs) {
+                out.push(FeedItemOut {
+                    source: source.clone(),
+                    kind: "image".into(),
+                    uri: Some(p.uri),
+                    local_path: None,
+                    poster_path: None,
+                    caption: caption.clone(),
+                    timestamp_ms: Some(ts),
+                });
+            }
+            if status.as_deref() == Some("downloaded") {
+                if let Some(lp) = local_path {
+                    out.push(FeedItemOut {
+                        source: source.clone(),
+                        kind: media_kind(&lp).into(),
+                        uri: None,
+                        local_path: Some(lp),
+                        poster_path: thumb_path,
+                        caption: caption.clone(),
+                        timestamp_ms: Some(ts),
+                    });
+                }
+            }
+        }
+    }
+
+    // Saved posts + reposts: only the ones that have actually been downloaded.
+    for (table, source, ts_col, cap_col) in [
+        ("saved_items", "Saved", "saved_at", "caption"),
+        ("reposts", "Repost", "reposted_at", "source_caption"),
+    ] {
+        let sql = format!(
+            "SELECT local_path, thumb_path, {cap_col}, {ts_col} FROM {table}
+             WHERE (?1 IS NULL OR archive_id = ?1)
+               AND download_status = 'downloaded' AND local_path IS NOT NULL
+             ORDER BY {ts_col} DESC LIMIT ?2"
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(params![archive_id, limit], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, Option<String>>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, i64>(3)?,
+            ))
+        })?;
+        for row in rows {
+            let (local_path, thumb_path, caption, ts) = row?;
+            out.push(FeedItemOut {
+                source: source.to_string(),
+                kind: media_kind(&local_path).into(),
+                uri: None,
+                local_path: Some(local_path),
+                poster_path: thumb_path,
+                caption: clip_caption(&caption, 280),
+                timestamp_ms: Some(ts),
+            });
+        }
+    }
+
+    // Newest-first across all sources, then bound the total (the frontend shuffles).
+    out.sort_by(|a, b| {
+        b.timestamp_ms
+            .unwrap_or(i64::MIN)
+            .cmp(&a.timestamp_ms.unwrap_or(i64::MIN))
+    });
+    out.truncate(limit as usize);
+    Ok(out)
+}
+
 fn connections(conn: &Connection, archive_id: Option<i64>) -> rusqlite::Result<Vec<ConnectionOut>> {
     let mut stmt = conn.prepare(
         "SELECT kind, username, href, followed_at FROM connections
@@ -1810,6 +2128,17 @@ pub fn query_search(
     search(&conn, &query, archive_id).map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+pub fn query_feed(
+    state: State<Db>,
+    archive_id: Option<i64>,
+    limit: Option<i64>,
+) -> Result<Vec<FeedItemOut>, String> {
+    let limit = limit.unwrap_or(3000).clamp(1, 10_000);
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    feed(&conn, archive_id, limit).map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1919,6 +2248,86 @@ mod tests {
 
         // Empty / whitespace query is a no-op (no FTS syntax error).
         assert!(search(&conn, "   ", None).unwrap().is_empty());
+    }
+
+    #[test]
+    fn feed_mixes_sources_and_unnests_json_media() {
+        let mut conn = open(":memory:").unwrap();
+        let payload = IngestPayload {
+            source_path: "ig.zip".into(),
+            service: "instagram".into(),
+            part_paths: vec![],
+            profile: None,
+            profile_changes: vec![],
+            saved_items: vec![],
+            saved_collections: vec![],
+            threads: vec![ThreadRow {
+                thread_path: "inbox/x".into(),
+                source: "inbox".into(),
+                slug: "x".into(),
+                title: "Alex".into(),
+                participants: "[\"Alex\"]".into(),
+                is_still_participant: true,
+                messages: vec![MessageRow {
+                    sender: "you".into(),
+                    timestamp_ms: 500,
+                    content: "look".into(),
+                    reactions: "[]".into(),
+                    media: "{\"photos\":[{\"uri\":\"dm/p.jpg\"}],\"videos\":[{\"uri\":\"dm/v.mp4\"}]}"
+                        .into(),
+                }],
+            }],
+            stories: vec![StoryRow {
+                uri: "stories/s.jpg".into(),
+                created_at: 100,
+                title: "my story".into(),
+                source_app: None,
+                device_id: None,
+            }],
+            reposts: vec![],
+            own_posts: vec![OwnPostRow {
+                uri: "posts/o.mp4".into(),
+                media_id: "o".into(),
+                ext: Some("mp4".into()),
+                size_bytes: None,
+            }],
+            connections: vec![],
+            posts: vec![PostRow {
+                created_at: 300,
+                text: "fb post".into(),
+                title: "".into(),
+                media: "[{\"uri\":\"posts/fb.jpg\"}]".into(),
+                links: "[]".into(),
+            }],
+            albums: vec![AlbumRow {
+                name: "Trip".into(),
+                description: None,
+                cover_photo_uri: None,
+                last_modified: 400,
+                photo_count: 1,
+                photos: "[{\"uri\":\"album/a.jpg\"}]".into(),
+            }],
+        };
+        ingest_into(&mut conn, &payload).unwrap();
+
+        let items = feed(&conn, None, 1000).unwrap();
+        let by_uri = |u: &str| items.iter().find(|i| i.uri.as_deref() == Some(u));
+
+        // One item per source, with extension-derived kind and provenance label.
+        assert_eq!(by_uri("stories/s.jpg").unwrap().source, "Story");
+        assert_eq!(by_uri("posts/o.mp4").unwrap().kind, "video");
+        assert_eq!(by_uri("posts/fb.jpg").unwrap().source, "Post");
+        assert_eq!(by_uri("album/a.jpg").unwrap().source, "Album · Trip");
+        assert_eq!(by_uri("dm/p.jpg").unwrap().kind, "image");
+        let dmv = by_uri("dm/v.mp4").unwrap();
+        assert_eq!(dmv.kind, "video");
+        assert_eq!(dmv.source, "DM · Alex");
+
+        // Newest-first; the undated own post sorts last.
+        assert_eq!(items.last().unwrap().uri.as_deref(), Some("posts/o.mp4"));
+
+        // Account scoping: a non-matching archive id yields nothing.
+        assert!(feed(&conn, Some(99), 1000).unwrap().is_empty());
     }
 
     #[test]
