@@ -79,6 +79,52 @@ describe("MergedArchiveReader", () => {
     await reader.close();
   });
 
+  it("merges a realistically-split Meta archive and resolves every entry to its owning part", async () => {
+    // Mirrors the real Meta split (CLAUDE.md gotcha #2): each part carries an 8-char
+    // random suffix with NO part number or order, one logical thread is split
+    // file-level across parts (its message JSON in one part, its photos + videos in two
+    // OTHERS), and the set is cleanly partitioned. Parts are opened in a deliberately
+    // non-sorted order to prove the merge never assumes filename ordering.
+    const PART_META = "facebook-johndoe-2026-05-14-a1b2c3d4.zip"; // json / taxonomy
+    const PART_PHOTOS = "facebook-johndoe-2026-05-14-9f8e7d6c.zip"; // a thread's photos
+    const PART_VIDEOS = "facebook-johndoe-2026-05-14-0a1b2c3d.zip"; // same thread's videos
+    const PART_MISC = "facebook-johndoe-2026-05-14-feedface.zip"; // unrelated media
+    const THREAD = "your_facebook_activity/messages/inbox/alex_123";
+    backArchives({
+      [PART_META]: [
+        "personal_information/profile_information/profile_information.json",
+        `${THREAD}/message_1.json`,
+        `${THREAD}/message_2.json`,
+      ],
+      [PART_PHOTOS]: [`${THREAD}/photos/a.jpg`, `${THREAD}/photos/b.jpg`],
+      [PART_VIDEOS]: [`${THREAD}/videos/c.mp4`],
+      [PART_MISC]: ["your_facebook_activity/posts/media/unrelated.jpg"],
+    });
+
+    // Supplied OUT of name order; a correct merge must not depend on ordering.
+    const reader = await MergedArchiveReader.open([PART_VIDEOS, PART_META, PART_MISC, PART_PHOTOS]);
+
+    // The union exposes every entry from every part.
+    expect(reader.listEntries()).toHaveLength(7);
+    expect(reader.hasEntry(`${THREAD}/message_1.json`)).toBe(true);
+    expect(reader.hasEntry(`${THREAD}/photos/a.jpg`)).toBe(true);
+    expect(reader.hasEntry(`${THREAD}/videos/c.mp4`)).toBe(true);
+
+    // Handles are assigned in OPEN order (VIDEOS=1, META=2, MISC=3, PHOTOS=4), so the
+    // echoed "<handle>:<name>" proves each read hit the part that actually holds it —
+    // the one thread's JSON, photos, and videos each resolve to a DIFFERENT part.
+    expect(await reader.readEntryText(`${THREAD}/message_1.json`)).toBe(
+      `2:${THREAD}/message_1.json`,
+    );
+    expect(await reader.readEntryText(`${THREAD}/photos/a.jpg`)).toBe(`4:${THREAD}/photos/a.jpg`);
+    expect(await reader.readEntryText(`${THREAD}/videos/c.mp4`)).toBe(`1:${THREAD}/videos/c.mp4`);
+    expect(await reader.readEntryText("your_facebook_activity/posts/media/unrelated.jpg")).toBe(
+      "3:your_facebook_activity/posts/media/unrelated.jpg",
+    );
+
+    await reader.close();
+  });
+
   it("treats a single part exactly like a one-zip archive (the Instagram path)", async () => {
     backArchives({ "ig.zip": ["your_instagram_activity/saved/saved_posts.json"] });
     const reader = await MergedArchiveReader.open(["ig.zip"]);

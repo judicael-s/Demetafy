@@ -16,13 +16,22 @@ export const downloadQueue = createDownloadQueue({
   cookiesPath: getCookiesPath,
 });
 
-/** Verify the bundled yt-dlp sidecar runs (Rust spawns it). Returns the trimmed
- *  `--version` string, or null on any failure. Surfaced in Settings. */
-export async function checkYtdlp(): Promise<string | null> {
+/** Sidecar probe result mirrored from Rust (`YtdlpStatus`): the running `--version`
+ *  (null if the sidecar can't run), the version this build pins, and whether the
+ *  running sidecar predates that pin. */
+export interface YtdlpStatus {
+  version: string | null;
+  pinned: string;
+  stale: boolean;
+}
+
+/** Probe the bundled yt-dlp sidecar (Rust spawns it). On any IPC failure, returns a
+ *  not-found status rather than throwing, so Settings can render it directly. */
+export async function checkYtdlp(): Promise<YtdlpStatus> {
   try {
-    return await invoke<string | null>("ytdlp_version");
+    return await invoke<YtdlpStatus>("ytdlp_status");
   } catch {
-    return null;
+    return { version: null, pinned: "", stale: false };
   }
 }
 

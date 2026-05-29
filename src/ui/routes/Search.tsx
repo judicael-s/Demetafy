@@ -1,5 +1,6 @@
 import { createMemo, createResource, For, Show, type JSX } from "solid-js";
 import { A, useSearchParams } from "@solidjs/router";
+import { EmptyState } from "../components/EmptyState";
 import { fetchSearch, type SearchResult } from "../lib/queries";
 import { useApp } from "../state/app";
 
@@ -77,11 +78,26 @@ export default function Search(): JSX.Element {
       </div>
 
       <div class="min-h-0 flex-1 overflow-y-auto px-8 py-5">
-        <Show when={query()}>
+        <Show
+          when={query()}
+          fallback={
+            <EmptyState
+              icon="search"
+              title="Search your archive"
+              hint="Find anything across your messages, saved posts, and reposts."
+            />
+          }
+        >
           <Show when={!results.loading} fallback={<p class="text-sm text-muted">Searching…</p>}>
             <Show
               when={total() > 0}
-              fallback={<p class="text-sm text-muted">No matches. Try a different word.</p>}
+              fallback={
+                <EmptyState
+                  icon="search"
+                  title="No matches"
+                  hint={`Nothing matched “${query()}”. Try a different word.`}
+                />
+              }
             >
               <For each={groups()}>
                 {(g) => (

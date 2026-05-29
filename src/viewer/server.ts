@@ -410,8 +410,12 @@ export function startServer(opts: ServerOptions): Server {
         const mime = MIME[ext] ?? 'application/octet-stream';
         const stream = createReadStream(full);
         stream.on('error', () => sendError(404, 'Not found'));
-        res.writeHead(200, { 'Content-Type': mime });
-        stream.pipe(res);
+        // Defer writeHead until the file is confirmed open — if it errors
+        // first, sendError(404) above fires before any headers are sent.
+        stream.once('open', () => {
+          res.writeHead(200, { 'Content-Type': mime });
+          stream.pipe(res);
+        });
         return;
       }
 

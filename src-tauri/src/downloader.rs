@@ -13,8 +13,9 @@
 //! `clear_finished_downloads`, `retry_failed_downloads`). Terminal outcomes
 //! persist via `crate::db::write_download_status`; every change emits a
 //! `download://update` event (one item per event) that the WebView mirrors into
-//! its read-only store (`src/ui/lib/download-queue.ts`). `ytdlp_version` (the
-//! sidecar version probe, used by Settings) is the only other command here.
+//! its read-only store (`src/ui/lib/download-queue.ts`). `ytdlp_status` (the
+//! sidecar version probe + staleness check, used by Settings) is the only other
+//! command here.
 //!
 //! History: increment 1 moved the spawn to Rust while TS kept the queue/retry;
 //! 2a added this Rust queue alongside; 2b (current) deleted the TS engine, so the
@@ -37,6 +38,16 @@ use crate::db::Db;
 /// `sidecar()` makes the runtime look in a nonexistent `<exe_dir>/binaries/` and
 /// the spawn fails with "path not found" (os error 3).
 const SIDECAR: &str = "yt-dlp";
+
+/// yt-dlp version this build was tested + shipped against, date-based `YYYY.MM.DD`
+/// so a plain lexicographic `<` compare is chronological. Bumping this is a RELEASE
+/// STEP: refresh the bundled `src-tauri/binaries/yt-dlp-<triple>` sidecar AND update
+/// this constant together (they're expected to match in a release build). A running
+/// sidecar OLDER than this flags `stale` in `ytdlp_status`, which Settings surfaces.
+/// We can't compare against the latest UPSTREAM version without a network call
+/// (privacy-first — the IG avatar fetch is the only sanctioned egress), so this pin
+/// plus the failure-signature arm in `categorize` are the two staleness signals.
+const YTDLP_PINNED_VERSION: &str = "2026.03.17";
 
 /// Raw outcome of one sidecar run, fed to `classify`.
 struct RunOutput {
@@ -154,9 +165,32 @@ async fn run_attempt<R: Runtime>(
     })
 }
 
-/// Verify the bundled sidecar runs. Returns the trimmed `--version` string, or None.
+/// Sidecar probe result for Settings: the running `--version`, the version this
+/// build pins, and whether the running sidecar predates the pin.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct YtdlpStatus {
+    /// Trimmed `--version` of the running sidecar, or None if the probe failed
+    /// (sidecar missing / not executable / nonzero exit).
+    version: Option<String>,
+    /// The version this build expects (`YTDLP_PINNED_VERSION`).
+    pinned: String,
+    /// True when a version was read AND it predates the pin (date-string compare).
+    stale: bool,
+}
+
+/// True when `version` predates `pinned`. yt-dlp's stable versions are zero-padded
+/// `YYYY.MM.DD`, so a plain lexicographic `<` is chronological; nightlies append
+/// `.NNNNNN`, which sorts AFTER the same-day stable — correctly treated as "newer".
+fn is_stale_version(version: &str, pinned: &str) -> bool {
+    version < pinned
+}
+
+/// Probe the bundled sidecar's version and compare it to the pinned expectation.
+/// Returns `version: None` (not an `Err`) when the sidecar can't be run, so Settings
+/// can render "Not found" without the call rejecting.
 #[tauri::command]
-pub async fn ytdlp_version<R: Runtime>(app: tauri::AppHandle<R>) -> Result<Option<String>, String> {
+pub async fn ytdlp_status<R: Runtime>(app: tauri::AppHandle<R>) -> Result<YtdlpStatus, String> {
     let sidecar = app.shell().sidecar(SIDECAR).map_err(|e| e.to_string())?;
     let (mut rx, _child) = sidecar.arg("--version").spawn().map_err(|e| e.to_string())?;
     let mut out = String::new();
@@ -168,10 +202,19 @@ pub async fn ytdlp_version<R: Runtime>(app: tauri::AppHandle<R>) -> Result<Optio
             _ => {}
         }
     }
-    Ok(if code == 0 {
-        Some(out.trim().to_string())
+    let version = if code == 0 {
+        let v = out.trim().to_string();
+        (!v.is_empty()).then_some(v)
     } else {
         None
+    };
+    let stale = version
+        .as_deref()
+        .is_some_and(|v| is_stale_version(v, YTDLP_PINNED_VERSION));
+    Ok(YtdlpStatus {
+        version,
+        pinned: YTDLP_PINNED_VERSION.to_string(),
+        stale,
     })
 }
 
@@ -203,6 +246,12 @@ enum DownloadResult {
     Transient {
         reason: String,
     },
+    /// Failure signature that means the bundled yt-dlp is too old to parse the page
+    /// (extractor drift — gotcha #3). Terminal like `Unknown` (maps to `error`), but
+    /// carries an actionable "update yt-dlp" reason instead of the raw stderr.
+    Outdated {
+        reason: String,
+    },
     Unknown {
         reason: String,
         #[allow(dead_code)] // mirrors the TS shape; not read on the Rust side yet
@@ -211,8 +260,9 @@ enum DownloadResult {
 }
 
 /// Classify a yt-dlp failure by scanning stderr. Conservative — anything we don't
-/// recognize is `Unknown` rather than guessed. Byte-for-byte aligned with the TS
-/// `categorize` (same substrings, same precedence: dead → loginWalled → transient).
+/// recognize is `Unknown` rather than guessed. Precedence: dead → loginWalled →
+/// transient → outdated → Unknown (most specific / most actionable first; the
+/// outdated arm catches extractor-staleness signatures just before the fallback).
 fn categorize(stderr: &str, exit_code: i32) -> DownloadResult {
     let lower = stderr.to_lowercase();
     // TS: stderr.trim().split("\n").pop()?.slice(0, 300) — last line, capped at 300 chars.
@@ -259,6 +309,22 @@ fn categorize(stderr: &str, exit_code: i32) -> DownloadResult {
         || lower.contains("too many requests");
     if is_transient {
         return DownloadResult::Transient { reason };
+    }
+
+    // yt-dlp falls behind Instagram/Facebook HTML changes every few weeks (gotcha #3);
+    // these signatures mean the extractor itself couldn't parse the page — almost always
+    // "the bundled yt-dlp is too old", not a bad URL (we host-validate URLs upstream).
+    // Last before Unknown so dead/login/transient still win; swaps the raw stderr for an
+    // actionable reason the dock renders verbatim.
+    let is_outdated = lower.contains("unable to extract")
+        || lower.contains("unsupported url")
+        || lower.contains("no video formats")
+        || lower.contains("please report this issue")
+        || lower.contains("out of date");
+    if is_outdated {
+        return DownloadResult::Outdated {
+            reason: "Downloader may be out of date — update yt-dlp.".into(),
+        };
     }
 
     DownloadResult::Unknown { reason, exit_code }
@@ -538,7 +604,9 @@ fn map_result(
             None,
             Some(reason.clone()),
         ),
-        DownloadResult::Transient { reason } | DownloadResult::Unknown { reason, .. } => (
+        DownloadResult::Transient { reason }
+        | DownloadResult::Outdated { reason }
+        | DownloadResult::Unknown { reason, .. } => (
             "error".into(),
             "error".into(),
             None,
@@ -876,8 +944,9 @@ pub fn retry_failed_downloads<R: Runtime>(
 #[cfg(test)]
 mod tests {
     use super::{
-        basename, categorize, classify, is_downloadable_permalink, map_result, parse_destination,
-        parse_progress_line, parse_thumbnail, run_with_retry, DownloadResult, RunOutput,
+        basename, categorize, classify, is_downloadable_permalink, is_stale_version, map_result,
+        parse_destination, parse_progress_line, parse_thumbnail, run_with_retry, DownloadResult,
+        RunOutput,
     };
     use std::cell::Cell;
 
@@ -990,6 +1059,44 @@ mod tests {
             DownloadResult::Unknown { reason, .. } => assert!(reason.chars().count() <= 300),
             other => panic!("expected Unknown, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn categorize_flags_outdated_extractor() {
+        for stderr in [
+            "ERROR: Unable to extract shared data; please report this issue",
+            "ERROR: Unsupported URL: https://www.instagram.com/reel/xyz/",
+            "ERROR: No video formats found!",
+            "ERROR: yt-dlp is out of date, update with `yt-dlp -U`",
+        ] {
+            match categorize(stderr, 1) {
+                DownloadResult::Outdated { reason } => {
+                    assert!(reason.contains("update yt-dlp"), "actionable reason for {stderr:?}")
+                }
+                other => panic!("expected Outdated for {stderr:?}, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn categorize_outdated_loses_to_more_specific() {
+        // A login wall whose message also says "unable to extract" stays loginWalled —
+        // adding cookies is more actionable than updating the downloader.
+        assert!(matches!(
+            categorize("ERROR: Unable to extract data; login required", 1),
+            DownloadResult::LoginWalled { .. }
+        ));
+    }
+
+    // ── is_stale_version (date-string compare, pin injected) ─────────────────
+
+    #[test]
+    fn flags_only_older_sidecar_as_stale() {
+        assert!(is_stale_version("2026.03.16", "2026.03.17"));
+        assert!(!is_stale_version("2026.03.17", "2026.03.17"));
+        assert!(!is_stale_version("2026.04.01", "2026.03.17"));
+        // Same-day nightly (build suffix) is newer, not stale.
+        assert!(!is_stale_version("2026.03.17.123456", "2026.03.17"));
     }
 
     // ── parse_destination (mirrors ytdlp-core.test.ts) ───────────────────────
@@ -1206,9 +1313,13 @@ mod tests {
         let (s, db, ..) = map_result(&DownloadResult::Dead { reason: "gone".into() }, "x");
         assert_eq!((s.as_str(), db.as_str()), ("dead", "dead"));
 
-        // Both transient and unknown collapse to the "error" terminal status.
+        // Transient, outdated, and unknown all collapse to the "error" terminal status.
         let (s, db, ..) = map_result(&DownloadResult::Transient { reason: "net".into() }, "x");
         assert_eq!((s.as_str(), db.as_str()), ("error", "error"));
+        let (s, db, .., reason) =
+            map_result(&DownloadResult::Outdated { reason: "update yt-dlp".into() }, "x");
+        assert_eq!((s.as_str(), db.as_str()), ("error", "error"));
+        assert_eq!(reason.as_deref(), Some("update yt-dlp"));
         let (s, db, ..) =
             map_result(&DownloadResult::Unknown { reason: "huh".into(), exit_code: 9 }, "x");
         assert_eq!((s.as_str(), db.as_str()), ("error", "error"));

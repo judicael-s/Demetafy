@@ -5,7 +5,7 @@ import { useApp } from "../state/app";
 import { ImportPanel } from "../components/ImportPanel";
 import { deleteArchive, type ArchiveAccount } from "../lib/queries";
 import { downloadDir } from "../lib/db";
-import { checkYtdlp } from "../lib/downloads";
+import { checkYtdlp, type YtdlpStatus } from "../lib/downloads";
 import {
   getCookiesPath,
   getFetchAvatarsEnabled,
@@ -23,7 +23,7 @@ export default function Settings(): JSX.Element {
   const [parallel, setParallel] = createSignal(1);
   const [cookies, setCookies] = createSignal<string | undefined>(undefined);
   const [downloadsPath, setDownloadsPath] = createSignal("");
-  const [ytdlpVersion, setYtdlpVersion] = createSignal<string | null | undefined>(undefined);
+  const [ytdlp, setYtdlp] = createSignal<YtdlpStatus | undefined>(undefined);
   const [fetchAvatars, setFetchAvatars] = createSignal(false);
 
   onMount(async () => {
@@ -37,7 +37,7 @@ export default function Settings(): JSX.Element {
     } catch {
       /* leave blank if the command isn't available */
     }
-    setYtdlpVersion(await checkYtdlp());
+    setYtdlp(await checkYtdlp());
   });
 
   const toggle = () => {
@@ -174,13 +174,20 @@ export default function Settings(): JSX.Element {
         <div class="mt-4 flex items-center justify-between gap-4">
           <span class="text-sm text-ink">yt-dlp</span>
           <span class="text-xs text-muted">
-            {ytdlpVersion() === undefined
+            {ytdlp() === undefined
               ? "Checking…"
-              : ytdlpVersion()
-                ? `v${ytdlpVersion()}`
+              : ytdlp()!.version
+                ? `v${ytdlp()!.version}`
                 : "Not found"}
           </span>
         </div>
+        <Show when={ytdlp()?.stale}>
+          <div class="mt-3 rounded-lg border border-amber-500/50 bg-amber-500/10 px-3 py-2 text-xs text-ink">
+            <strong class="font-medium">Downloader may be out of date.</strong> The bundled yt-dlp
+            (v{ytdlp()!.version}) is older than the version this build expects (v{ytdlp()!.pinned}).
+            Saved-video downloads may fail until it's updated.
+          </div>
+        </Show>
       </section>
 
       <section class="mt-6 rounded-xl border border-border bg-surface p-5">

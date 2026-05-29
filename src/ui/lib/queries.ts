@@ -719,7 +719,7 @@ export async function fetchDownloadTargets(archiveId?: number): Promise<EnqueueI
       slug: sanitizeSlug(it.collections[0]),
     }));
 
-  const shareTargets: EnqueueInput[] = (await fetchShareRows(service))
+  const shareTargets: EnqueueInput[] = (await fetchShareRows(archiveId))
     .filter((r) => (r.status === "none" || r.status === "error") && r.link)
     .map((r) => ({ source: "message", refId: r.id, url: r.link!, slug: DM_SLUG }));
 

@@ -101,21 +101,8 @@ export class ArchiveReader {
   }
 }
 
-/**
- * Best-effort multi-part detection. Meta splits large DYIs into multiple .zip parts;
- * the naming convention isn't publicly documented, so this matches common patterns
- * (`*_part1.zip`, `*-part1.zip`, etc.) without claiming completeness.
- *
- * TODO(phase0-step2): when we hit a real multi-part archive, implement assembly here.
- * Today: detect, warn, fail closed. Alex' first archive is single-part so untested.
- */
-export function detectMultiPart(zipPath: string): {
-  isMultiPart: boolean;
-  siblingPattern?: string;
-} {
-  const m = /(.+?)[-_]?part\d+\.zip$/i.exec(zipPath);
-  if (m) {
-    return { isMultiPart: true, siblingPattern: `${m[1]}*part*.zip` };
-  }
-  return { isMultiPart: false };
-}
+// Multi-part archives are handled in the desktop app by MergedArchiveReader
+// (src/ui/lib/archive.ts), which merges an explicit list of parts the user
+// selects at import. There is no reliable way to detect multi-part membership
+// from a single filename — real Meta parts carry a random suffix, not a part
+// number — so the CLI operates on one archive at a time by design.

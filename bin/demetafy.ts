@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import path from 'node:path';
 import { Command } from 'commander';
-import { ArchiveReader, detectMultiPart } from '../src/parsers/shared/archive.js';
+import { ArchiveReader } from '../src/parsers/shared/archive.js';
 import {
   parseSavedPosts,
   parseSavedCollections,
@@ -53,8 +53,6 @@ saved
   .option('-n, --limit <n>', 'Show top N most-recent items', '10')
   .action(async (archivePath: string, opts: { limit: string }) => {
     const limit = parsePositiveInt(opts.limit, '--limit');
-    warnIfMultiPart(archivePath);
-
     const reader = await ArchiveReader.open(archivePath);
     try {
       const SAVED_POSTS = 'your_instagram_activity/saved/saved_posts.json';
@@ -134,8 +132,6 @@ saved
       if (!Number.isFinite(limit) || limit < 0) {
         throw new Error(`--limit must be a non-negative integer, got: ${opts.limit}`);
       }
-      warnIfMultiPart(archivePath);
-
       const reader = await ArchiveReader.open(archivePath);
       try {
         const SAVED_POSTS = 'your_instagram_activity/saved/saved_posts.json';
@@ -281,8 +277,6 @@ messages
       opts: { limit: string; includeRequests?: boolean; includeBroadcast?: boolean },
     ) => {
       const limit = parsePositiveInt(opts.limit, '--limit');
-      warnIfMultiPart(archivePath);
-
       const sources: MessagesSource[] = ['inbox'];
       if (opts.includeRequests) sources.push('message_requests');
       if (opts.includeBroadcast) sources.push('broadcast');
@@ -370,8 +364,6 @@ messages
       slug: string,
       opts: { includeRequests?: boolean; includeBroadcast?: boolean },
     ) => {
-      warnIfMultiPart(archivePath);
-
       const sources: MessagesSource[] = ['inbox'];
       if (opts.includeRequests) sources.push('message_requests');
       if (opts.includeBroadcast) sources.push('broadcast');
@@ -448,7 +440,6 @@ program
   .option('-n, --limit <n>', 'Show top N most-recent stories', '15')
   .action(async (archivePath: string, opts: { limit: string }) => {
     const limit = parsePositiveInt(opts.limit, '--limit');
-    warnIfMultiPart(archivePath);
     const reader = await ArchiveReader.open(archivePath);
     try {
       const STORIES = 'your_instagram_activity/media/stories.json';
@@ -487,7 +478,6 @@ program
   .option('-n, --limit <n>', 'Show top N most-recent reposts', '10')
   .action(async (archivePath: string, opts: { limit: string }) => {
     const limit = parsePositiveInt(opts.limit, '--limit');
-    warnIfMultiPart(archivePath);
     const reader = await ArchiveReader.open(archivePath);
     try {
       const REPOSTS = 'your_instagram_activity/media/reposts.json';
@@ -524,7 +514,6 @@ program
   .description('List own feed posts (Meta DYI 2026 ships only media — no JSON metadata)')
   .argument('<archive>', 'Path to Instagram DYI .zip')
   .action(async (archivePath: string) => {
-    warnIfMultiPart(archivePath);
     const reader = await ArchiveReader.open(archivePath);
     try {
       const entries = reader.listEntries();
@@ -566,7 +555,6 @@ program
   .description('Show profile information and rename history')
   .argument('<archive>', 'Path to Instagram DYI .zip')
   .action(async (archivePath: string) => {
-    warnIfMultiPart(archivePath);
     const reader = await ArchiveReader.open(archivePath);
     try {
       const PERSONAL = 'personal_information/personal_information/personal_information.json';
@@ -637,7 +625,6 @@ program
   .argument('<archive>', 'Path to Instagram DYI .zip')
   .option('-d, --db <path>', 'SQLite index path (created if missing)', 'data/index.sqlite')
   .action(async (archivePath: string, opts: { db: string }) => {
-    warnIfMultiPart(archivePath);
     const startedAt = Date.now();
     console.log('');
     console.log(`Ingesting: ${archivePath}`);
@@ -813,17 +800,6 @@ function parsePositiveInt(raw: string, flagName: string): number {
 function requireEntry(reader: ArchiveReader, path: string): void {
   if (!reader.hasEntry(path)) {
     throw new Error(`Archive missing required entry: ${path}`);
-  }
-}
-
-function warnIfMultiPart(archivePath: string): void {
-  const mp = detectMultiPart(archivePath);
-  if (mp.isMultiPart) {
-    console.warn(
-      `WARN: ${archivePath} looks like part of a multi-part archive ` +
-        `(pattern: ${mp.siblingPattern}). Multi-part assembly is not yet implemented; ` +
-        `results may be incomplete.`,
-    );
   }
 }
 

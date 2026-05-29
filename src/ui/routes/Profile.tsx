@@ -3,6 +3,7 @@ import { useApp } from "../state/app";
 import { fetchProfileChanges } from "../lib/queries";
 import { ArchiveImage } from "../components/ArchiveMedia";
 import { ArchiveCompletion } from "../components/ArchiveCompletion";
+import { EmptyState } from "../components/EmptyState";
 import { vmediaUrl } from "../lib/media";
 import { viewer } from "../state/viewer";
 
@@ -40,7 +41,16 @@ export default function Profile(): JSX.Element {
       </div>
 
       <div class="min-h-0 flex-1 overflow-y-auto px-8 py-6">
-        <Show when={p()} fallback={<p class="text-sm text-muted">No profile in this archive.</p>}>
+        <Show
+          when={p()}
+          fallback={
+            <EmptyState
+              icon="profile"
+              title="No profile in this archive"
+              hint="This export didn't include profile information."
+            />
+          }
+        >
           {(prof) => (
             <div class="mx-auto max-w-2xl">
               <div class="flex items-center gap-4">

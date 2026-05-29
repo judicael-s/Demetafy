@@ -83,7 +83,7 @@ pub fn run() {
             avatars::fetch_ig_avatar,
             avatars::fetch_ig_avatars,
             downloads::download_dir,
-            downloader::ytdlp_version,
+            downloader::ytdlp_status,
             downloader::enqueue_downloads,
             downloader::download_queue_snapshot,
             downloader::clear_finished_downloads,
