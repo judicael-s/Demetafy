@@ -13,13 +13,15 @@
 //! absolute paths and any non-`Normal` component (`..`, root, prefix), then
 //! canonicalize and confirm containment before reading — no arbitrary FS read.
 
-use std::fs;
+use std::fs::{self, File};
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Component, Path, PathBuf};
+use std::time::UNIX_EPOCH;
 
 use tauri::http::{header, Request, Response};
 use tauri::{Manager, Runtime, UriSchemeContext};
 
-use crate::media::{content_type, not_found, respond};
+use crate::media::{content_type, not_found, respond_ranged};
 
 /// Absolute path to the (created-on-demand) downloads root: app_data_dir/downloads.
 /// `pub(crate)` so the avatar fetcher can store cached images under it (and have
@@ -63,9 +65,33 @@ fn resolve_within(root: &Path, rel: &str) -> Option<PathBuf> {
     canon_target.starts_with(&canon_root).then_some(canon_target)
 }
 
-/// `dmedia://` scheme handler. Reads a downloaded file under the fixed downloads
-/// root and serves it with a guessed content-type and Range support (so video
-/// can seek), reusing the same response plumbing as `vmedia`.
+/// Strong cache validator for a downloaded file: length + mtime. The bytes never
+/// change once written (a re-download reuses the same `%(id)s` path), so this is a
+/// stable, immutable validator.
+fn file_etag(meta: &fs::Metadata) -> String {
+    let mtime = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    format!("\"{:x}-{:x}\"", meta.len(), mtime)
+}
+
+/// Read the inclusive byte range [start, end] from `path` without loading the whole
+/// file — seek to `start`, read exactly `end - start + 1` bytes.
+fn read_file_range(path: &Path, start: usize, end: usize) -> Result<Vec<u8>, String> {
+    let mut f = File::open(path).map_err(|e| format!("open {}: {e}", path.display()))?;
+    f.seek(SeekFrom::Start(start as u64)).map_err(|e| e.to_string())?;
+    let mut buf = vec![0u8; end - start + 1];
+    f.read_exact(&mut buf).map_err(|e| e.to_string())?;
+    Ok(buf)
+}
+
+/// `dmedia://` scheme handler. Serves a downloaded file under the fixed downloads
+/// root with a guessed content-type, an immutable ETag, and capped Range support
+/// (so video seeks read only the requested chunk), reusing `vmedia`'s response
+/// plumbing.
 pub fn handle<R: Runtime>(
     ctx: UriSchemeContext<'_, R>,
     request: Request<Vec<u8>>,
@@ -89,24 +115,30 @@ pub fn handle<R: Runtime>(
             return not_found();
         }
     };
-    let bytes = match fs::read(&path) {
-        Ok(b) => b,
+    let meta = match fs::metadata(&path) {
+        Ok(m) => m,
         Err(e) => {
-            log::warn!("dmedia read {}: {e}", path.display());
+            log::warn!("dmedia stat {}: {e}", path.display());
             return not_found();
         }
     };
+    let total = meta.len() as usize;
+    let etag = file_etag(&meta);
     let ctype = content_type(&rel);
-    let range_header = request
-        .headers()
-        .get(header::RANGE)
+    let headers = request.headers();
+    let range_header = headers.get(header::RANGE).and_then(|v| v.to_str().ok());
+    let if_none_match = headers
+        .get(header::IF_NONE_MATCH)
         .and_then(|v| v.to_str().ok());
-    respond(bytes, ctype, range_header)
+
+    respond_ranged(total, &etag, ctype, range_header, if_none_match, |start, end| {
+        read_file_range(&path, start, end)
+    })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::resolve_within;
+    use super::{file_etag, read_file_range, resolve_within};
     use std::fs;
 
     #[test]
@@ -128,6 +160,35 @@ mod tests {
         fs::write(sub.join("abc.mp4"), b"data").unwrap();
         assert!(resolve_within(&root, "conspri/abc.mp4").is_some());
         assert!(resolve_within(&root, "conspri/missing.mp4").is_none());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn reads_inclusive_byte_ranges() {
+        let root = std::env::temp_dir().join(format!("demetafy_range_{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let p = root.join("f.bin");
+        let data: Vec<u8> = (0..5000u32).map(|i| (i % 256) as u8).collect();
+        fs::write(&p, &data).unwrap();
+
+        assert_eq!(read_file_range(&p, 0, 9).unwrap(), data[0..=9]);
+        assert_eq!(read_file_range(&p, 1000, 1999).unwrap(), data[1000..=1999]);
+        assert_eq!(read_file_range(&p, 0, data.len() - 1).unwrap(), data);
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn file_etag_is_quoted_and_stable() {
+        let root = std::env::temp_dir().join(format!("demetafy_etag_{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let p = root.join("f.bin");
+        fs::write(&p, b"hello").unwrap();
+
+        let e1 = file_etag(&fs::metadata(&p).unwrap());
+        assert!(e1.starts_with('"') && e1.ends_with('"'));
+        assert_eq!(e1, file_etag(&fs::metadata(&p).unwrap()));
+
         let _ = fs::remove_dir_all(&root);
     }
 }

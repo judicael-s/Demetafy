@@ -16,18 +16,31 @@
 
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::Read;
+use std::io::{Read, Seek, SeekFrom};
 use std::sync::Mutex;
 
 use tauri::http::{header, Request, Response, StatusCode};
 use tauri::{Manager, Runtime, UriSchemeContext};
-use zip::ZipArchive;
+use zip::{CompressionMethod, ZipArchive};
 
 use crate::db::Db;
 
 /// Hard ceiling on a single media entry we'll buffer into memory (zip-bomb / huge
 /// declared-size defense). Above any realistic DYI media file.
 const MAX_MEDIA_ENTRY: u64 = 2 * 1024 * 1024 * 1024;
+
+/// Cache directive for media responses. Archive entries and downloaded files are
+/// immutable — an entry's bytes never change, and a re-download reuses the same
+/// `%(id)s` path — so the WebView may cache aggressively and skip the round-trip.
+pub(crate) const CACHE_IMMUTABLE: &str = "private, max-age=31536000, immutable";
+
+/// Max bytes returned for a single 206. The WebView media stack opens video with
+/// an open-ended `Range: bytes=0-`; without a cap that means reading the WHOLE
+/// file (e.g. the Saved grid's `#t=0.1` poster trick would pull an entire video
+/// into memory just to paint a thumbnail). Capping makes `preload="metadata"`,
+/// poster frames, and seeking fetch bounded chunks; Chromium/WebKit request the
+/// next chunk as playback advances.
+const RANGE_CHUNK: usize = 4 * 1024 * 1024;
 
 #[derive(Default)]
 pub struct MediaArchive(pub Mutex<Option<OpenArchive>>);
@@ -41,6 +54,19 @@ pub struct OpenArchive {
 pub struct ArchivePart {
     path: String,
     zip: Option<ZipArchive<File>>,
+}
+
+/// Central-directory metadata for one entry — enough to build cache validators and
+/// serve a byte range without first reading the entry. `data_start` is the offset
+/// of the entry's raw bytes within its part, used for random access on `Stored`
+/// entries (Meta stores already-compressed media uncompressed).
+#[derive(Clone, Copy)]
+struct EntryMeta {
+    part_idx: usize,
+    size: u64,
+    crc32: u32,
+    compression: CompressionMethod,
+    data_start: u64,
 }
 
 impl OpenArchive {
@@ -92,7 +118,9 @@ impl OpenArchive {
         Ok(self.name_to_part.as_ref().unwrap())
     }
 
-    fn read_entry(&mut self, entry: &str) -> Result<Vec<u8>, String> {
+    /// Read an entry's central-directory metadata (size, crc, compression, data
+    /// offset) without reading its bytes. Enforces the size ceiling up front.
+    fn entry_meta(&mut self, entry: &str) -> Result<EntryMeta, String> {
         let part_idx = select_part_for_entry(self.ensure_index()?, entry)
             .ok_or_else(|| format!("entry {entry}: not found in any archive part"))?;
         self.open_part(part_idx)?;
@@ -106,6 +134,61 @@ impl OpenArchive {
         if zf.size() > MAX_MEDIA_ENTRY {
             return Err(format!("entry {entry} too large ({} bytes)", zf.size()));
         }
+        Ok(EntryMeta {
+            part_idx,
+            size: zf.size(),
+            crc32: zf.crc32(),
+            compression: zf.compression(),
+            data_start: zf.data_start(),
+        })
+    }
+
+    /// Read the inclusive byte range [start, end] of an entry. `Stored` entries
+    /// (Meta's media) are served by seeking the part file directly to the entry's
+    /// data offset — no decompression, no whole-file read. `Deflated`/other entries
+    /// (rare for media) fall back to decompressing the whole entry, then slicing.
+    fn read_entry_range(
+        &mut self,
+        entry: &str,
+        meta: &EntryMeta,
+        start: usize,
+        end: usize,
+    ) -> Result<Vec<u8>, String> {
+        match meta.compression {
+            CompressionMethod::Stored => {
+                let path = self
+                    .parts
+                    .get(meta.part_idx)
+                    .map(|p| p.path.as_str())
+                    .ok_or_else(|| format!("part {} out of range", meta.part_idx))?;
+                let mut f = File::open(path).map_err(|e| format!("open {path}: {e}"))?;
+                f.seek(SeekFrom::Start(meta.data_start + start as u64))
+                    .map_err(|e| e.to_string())?;
+                let mut buf = vec![0u8; end - start + 1];
+                f.read_exact(&mut buf).map_err(|e| e.to_string())?;
+                Ok(buf)
+            }
+            _ => {
+                let full = self.read_entry_full(entry, meta.part_idx)?;
+                let last = full.len().saturating_sub(1);
+                if start > last || end > last {
+                    return Err(format!("range {start}-{end} beyond entry {entry}"));
+                }
+                Ok(full[start..=end].to_vec())
+            }
+        }
+    }
+
+    /// Decompress an entry fully into memory (the `Deflated` fallback path).
+    fn read_entry_full(&mut self, entry: &str, part_idx: usize) -> Result<Vec<u8>, String> {
+        self.open_part(part_idx)?;
+        let zip = self.parts[part_idx]
+            .zip
+            .as_mut()
+            .ok_or_else(|| format!("part {part_idx} was not opened"))?;
+        let zf = zip
+            .by_name(entry)
+            .map_err(|e| format!("entry {entry} in part {part_idx}: {e}"))?;
         let cap = zf.size().min(MAX_MEDIA_ENTRY) as usize;
         let mut buf = Vec::with_capacity(cap);
         zf.take(MAX_MEDIA_ENTRY + 1)
@@ -236,78 +319,156 @@ pub(crate) fn not_found() -> Response<Vec<u8>> {
         .unwrap()
 }
 
-/// Build a media response from a full body, honoring a single-range request
-/// (206) or serving the whole body (200). Shared by the `vmedia` (zip) and
-/// `dmedia` (on-disk download) scheme handlers — both read the bytes their own
-/// way, then hand off the byte/content-type/range plumbing here.
-pub(crate) fn respond(bytes: Vec<u8>, ctype: &str, range_header: Option<&str>) -> Response<Vec<u8>> {
-    let total = bytes.len();
-    let range = range_header.and_then(|v| parse_range(v, total));
-    match range {
-        Some((start, end)) => {
-            let slice = bytes[start..=end].to_vec();
-            Response::builder()
-                .status(StatusCode::PARTIAL_CONTENT)
-                .header(header::CONTENT_TYPE, ctype)
-                .header(header::ACCEPT_RANGES, "bytes")
-                .header(header::CONTENT_RANGE, format!("bytes {start}-{end}/{total}"))
-                .header(header::CONTENT_LENGTH, slice.len().to_string())
-                .body(slice)
-                .unwrap()
+/// Does an `If-None-Match` header satisfy our (strong) `etag`? Accepts `*`, an
+/// exact match, or a comma-separated list (optionally weak-prefixed) containing it.
+fn etag_matches(if_none_match: &str, etag: &str) -> bool {
+    if_none_match == "*"
+        || if_none_match.split(',').any(|t| {
+            let t = t.trim();
+            t == etag || t.strip_prefix("W/").map(str::trim) == Some(etag)
+        })
+}
+
+pub(crate) fn not_modified(etag: &str) -> Response<Vec<u8>> {
+    Response::builder()
+        .status(StatusCode::NOT_MODIFIED)
+        .header(header::ETAG, etag)
+        .header(header::CACHE_CONTROL, CACHE_IMMUTABLE)
+        .body(Vec::new())
+        .unwrap()
+}
+
+/// Build a media response, reading ONLY the bytes needed via `read_slice(start, end)`
+/// (inclusive) rather than buffering the whole file. Honors `If-None-Match` (304, no
+/// read), a single-range request (206, capped to `RANGE_CHUNK`), or serves the whole
+/// body (200). Shared by the `vmedia` (zip) and `dmedia` (on-disk) scheme handlers.
+pub(crate) fn respond_ranged(
+    total: usize,
+    etag: &str,
+    ctype: &str,
+    range_header: Option<&str>,
+    if_none_match: Option<&str>,
+    read_slice: impl FnOnce(usize, usize) -> Result<Vec<u8>, String>,
+) -> Response<Vec<u8>> {
+    if let Some(inm) = if_none_match {
+        if etag_matches(inm, etag) {
+            return not_modified(etag);
         }
-        None => Response::builder()
-            .status(StatusCode::OK)
-            .header(header::CONTENT_TYPE, ctype)
-            .header(header::ACCEPT_RANGES, "bytes")
-            .header(header::CONTENT_LENGTH, total.to_string())
-            .body(bytes)
-            .unwrap(),
+    }
+    match range_header.and_then(|v| parse_range(v, total)) {
+        Some((start, requested_end)) => {
+            let end = requested_end.min(start + RANGE_CHUNK - 1);
+            match read_slice(start, end) {
+                Ok(slice) => Response::builder()
+                    .status(StatusCode::PARTIAL_CONTENT)
+                    .header(header::CONTENT_TYPE, ctype)
+                    .header(header::ACCEPT_RANGES, "bytes")
+                    .header(header::CONTENT_RANGE, format!("bytes {start}-{end}/{total}"))
+                    .header(header::CONTENT_LENGTH, slice.len().to_string())
+                    .header(header::CACHE_CONTROL, CACHE_IMMUTABLE)
+                    .header(header::ETAG, etag)
+                    .body(slice)
+                    .unwrap(),
+                Err(e) => {
+                    log::warn!("media range read: {e}");
+                    not_found()
+                }
+            }
+        }
+        None => {
+            let body = if total == 0 {
+                Ok(Vec::new())
+            } else {
+                read_slice(0, total - 1)
+            };
+            match body {
+                Ok(body) => Response::builder()
+                    .status(StatusCode::OK)
+                    .header(header::CONTENT_TYPE, ctype)
+                    .header(header::ACCEPT_RANGES, "bytes")
+                    .header(header::CONTENT_LENGTH, body.len().to_string())
+                    .header(header::CACHE_CONTROL, CACHE_IMMUTABLE)
+                    .header(header::ETAG, etag)
+                    .body(body)
+                    .unwrap(),
+                Err(e) => {
+                    log::warn!("media full read: {e}");
+                    not_found()
+                }
+            }
+        }
     }
 }
 
-fn read_entry<R: Runtime>(
+/// Resolve the ordered part paths for the *active account's* archive. The DB lock is
+/// taken and released here, before any zip access, so we never hold the DB and media
+/// locks at once (vmedia is the only two-lock path). `archive_id` scopes the lookup so
+/// media never crosses between imports; `None` falls back to the newest archive (the
+/// brief window before the UI sets the active account). Step 16A backfills single-zip
+/// archives with one `archive_parts` row, so there is intentionally no `source_path`
+/// fallback here.
+fn resolve_paths<R: Runtime>(
     app: &tauri::AppHandle<R>,
     archive_id: Option<i64>,
-    entry: &str,
-) -> Result<Vec<u8>, String> {
-    // Resolve the part set for the *active account's* archive first, releasing the DB
-    // lock before touching zip files so we never hold two locks at once (vmedia is the
-    // only two-lock path). The archive_id scopes the lookup so media never crosses
-    // between imports — with two Instagram accounts (or IG + FB) loaded, each entry
-    // resolves against its own account's parts. `None` falls back to the newest archive
-    // (covers the brief window before the UI sets the active account). Step 16A backfills
-    // single-zip archives with one row in `archive_parts`, so there is intentionally no
-    // `source_path` fallback here.
-    let paths: Vec<String> = {
-        let db = app.state::<Db>();
-        let conn = db.0.lock().map_err(|e| e.to_string())?;
-        let resolved_archive_id: i64 = conn
-            .query_row(
-                "SELECT id FROM archives WHERE (?1 IS NULL OR id = ?1) ORDER BY id DESC LIMIT 1",
-                [archive_id],
-                |r| r.get(0),
-            )
-            .map_err(|e| format!("no archive ingested: {e}"))?;
-        let mut stmt = conn
-            .prepare("SELECT path FROM archive_parts WHERE archive_id = ?1 ORDER BY idx")
-            .map_err(|e| e.to_string())?;
-        let rows = stmt
-            .query_map([resolved_archive_id], |r| r.get::<_, String>(0))
-            .map_err(|e| e.to_string())?;
-        let mut paths = Vec::new();
-        for row in rows {
-            paths.push(row.map_err(|e| e.to_string())?);
+) -> Result<Vec<String>, String> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    let resolved_archive_id: i64 = conn
+        .query_row(
+            "SELECT id FROM archives WHERE (?1 IS NULL OR id = ?1) ORDER BY id DESC LIMIT 1",
+            [archive_id],
+            |r| r.get(0),
+        )
+        .map_err(|e| format!("no archive ingested: {e}"))?;
+    let mut stmt = conn
+        .prepare("SELECT path FROM archive_parts WHERE archive_id = ?1 ORDER BY idx")
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([resolved_archive_id], |r| r.get::<_, String>(0))
+        .map_err(|e| e.to_string())?;
+    let mut paths = Vec::new();
+    for row in rows {
+        paths.push(row.map_err(|e| e.to_string())?);
+    }
+    if paths.is_empty() {
+        return Err(format!(
+            "archive {resolved_archive_id} has no archive_parts rows"
+        ));
+    }
+    Ok(paths)
+}
+
+/// `vmedia://` scheme handler. Serves the requested archive entry with a guessed
+/// content-type, a strong ETag (`size-crc32`) + immutable caching, and single-range
+/// support (206, capped) so video/audio seek cheaply in the WebView without ever
+/// reading the whole entry.
+pub fn handle<R: Runtime>(
+    ctx: UriSchemeContext<'_, R>,
+    request: Request<Vec<u8>>,
+) -> Response<Vec<u8>> {
+    let (archive_id, encoded_entry) =
+        split_archive_path(request.uri().path().trim_start_matches('/'));
+    let entry = percent_decode(encoded_entry);
+    if entry.is_empty() {
+        return not_found();
+    }
+    let app = ctx.app_handle();
+    let paths = match resolve_paths(app, archive_id) {
+        Ok(p) => p,
+        Err(e) => {
+            log::warn!("vmedia {entry}: {e}");
+            return not_found();
         }
-        if paths.is_empty() {
-            return Err(format!(
-                "archive {resolved_archive_id} has no archive_parts rows"
-            ));
-        }
-        paths
     };
 
     let media = app.state::<MediaArchive>();
-    let mut guard = media.0.lock().map_err(|e| e.to_string())?;
+    let mut guard = match media.0.lock() {
+        Ok(g) => g,
+        Err(e) => {
+            log::warn!("vmedia lock: {e}");
+            return not_found();
+        }
+    };
     let needs_refresh = guard
         .as_ref()
         .map(|open| open.paths != paths)
@@ -315,34 +476,27 @@ fn read_entry<R: Runtime>(
     if needs_refresh {
         *guard = Some(OpenArchive::new(paths));
     }
-    guard.as_mut().unwrap().read_entry(entry)
-}
+    let open = guard.as_mut().unwrap();
 
-/// `vmedia://` scheme handler. Reads the requested archive entry and returns it
-/// with a guessed content-type, honoring single-range requests (206) so video
-/// and audio can seek in WebView2.
-pub fn handle<R: Runtime>(
-    ctx: UriSchemeContext<'_, R>,
-    request: Request<Vec<u8>>,
-) -> Response<Vec<u8>> {
-    let (archive_id, encoded_entry) = split_archive_path(request.uri().path().trim_start_matches('/'));
-    let entry = percent_decode(encoded_entry);
-    if entry.is_empty() {
-        return not_found();
-    }
-    let bytes = match read_entry(ctx.app_handle(), archive_id, &entry) {
-        Ok(b) => b,
+    let meta = match open.entry_meta(&entry) {
+        Ok(m) => m,
         Err(e) => {
             log::warn!("vmedia {entry}: {e}");
             return not_found();
         }
     };
+    let total = meta.size as usize;
+    let etag = format!("\"{:x}-{:x}\"", meta.size, meta.crc32);
     let ctype = content_type(&entry);
-    let range_header = request
-        .headers()
-        .get(header::RANGE)
+    let headers = request.headers();
+    let range_header = headers.get(header::RANGE).and_then(|v| v.to_str().ok());
+    let if_none_match = headers
+        .get(header::IF_NONE_MATCH)
         .and_then(|v| v.to_str().ok());
-    respond(bytes, ctype, range_header)
+
+    respond_ranged(total, &etag, ctype, range_header, if_none_match, |start, end| {
+        open.read_entry_range(&entry, &meta, start, end)
+    })
 }
 
 #[cfg(test)]
@@ -417,5 +571,88 @@ mod tests {
             split_archive_path("media%2Fprofile%2Fa.jpg"),
             (None, "media%2Fprofile%2Fa.jpg")
         );
+    }
+
+    #[test]
+    fn respond_ranged_full_range_and_conditional() {
+        let data: Vec<u8> = (0..1000u32).map(|i| i as u8).collect();
+        let etag = "\"abc\"";
+        let slice = |d: &[u8]| {
+            let d = d.to_vec();
+            move |s: usize, e: usize| Ok(d[s..=e].to_vec())
+        };
+
+        // No range → 200 full body, with cache validators.
+        let r = respond_ranged(data.len(), etag, "video/mp4", None, None, slice(&data));
+        assert_eq!(r.status(), StatusCode::OK);
+        assert_eq!(r.body().len(), 1000);
+        assert_eq!(r.headers().get(header::ETAG).unwrap(), etag);
+        assert!(r.headers().get(header::CACHE_CONTROL).is_some());
+
+        // Explicit range → 206 with exact slice + Content-Range.
+        let r = respond_ranged(data.len(), etag, "video/mp4", Some("bytes=10-19"), None, slice(&data));
+        assert_eq!(r.status(), StatusCode::PARTIAL_CONTENT);
+        assert_eq!(
+            r.headers().get(header::CONTENT_RANGE).unwrap().to_str().unwrap(),
+            "bytes 10-19/1000"
+        );
+        assert_eq!(r.body(), &data[10..=19]);
+
+        // Matching If-None-Match → 304 and the body reader is never invoked.
+        let r = respond_ranged(data.len(), etag, "video/mp4", None, Some(etag), |_, _| {
+            panic!("must not read on a 304")
+        });
+        assert_eq!(r.status(), StatusCode::NOT_MODIFIED);
+        assert!(r.body().is_empty());
+    }
+
+    #[test]
+    fn respond_ranged_caps_open_ended_range() {
+        let total = RANGE_CHUNK * 3;
+        let r = respond_ranged(total, "\"x\"", "video/mp4", Some("bytes=0-"), None, |s, e| {
+            Ok(vec![0u8; e - s + 1])
+        });
+        assert_eq!(r.status(), StatusCode::PARTIAL_CONTENT);
+        assert_eq!(r.body().len(), RANGE_CHUNK);
+        assert_eq!(
+            r.headers().get(header::CONTENT_RANGE).unwrap().to_str().unwrap(),
+            format!("bytes 0-{}/{}", RANGE_CHUNK - 1, total)
+        );
+    }
+
+    #[test]
+    fn stored_entry_meta_and_ranged_read() {
+        use std::io::Write;
+        use zip::write::{SimpleFileOptions, ZipWriter};
+
+        let dir = std::env::temp_dir().join(format!("demetafy_vmedia_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let zip_path = dir.join("part.zip");
+        let data: Vec<u8> = (0..20_000u32).map(|i| (i % 251) as u8).collect();
+        {
+            let f = File::create(&zip_path).unwrap();
+            let mut w = ZipWriter::new(f);
+            let opts = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+            w.start_file("media/clip.mp4", opts).unwrap();
+            w.write_all(&data).unwrap();
+            w.finish().unwrap();
+        }
+
+        let mut open = OpenArchive::new(vec![zip_path.to_string_lossy().into_owned()]);
+        let meta = open.entry_meta("media/clip.mp4").unwrap();
+        assert_eq!(meta.size as usize, data.len());
+        assert!(matches!(meta.compression, CompressionMethod::Stored));
+        // A mid-file range must match the original bytes (validates data_start math).
+        assert_eq!(
+            open.read_entry_range("media/clip.mp4", &meta, 5000, 5099).unwrap(),
+            data[5000..=5099]
+        );
+        // The (0, total-1) range — the 200 path — must reconstruct the whole entry.
+        assert_eq!(
+            open.read_entry_range("media/clip.mp4", &meta, 0, data.len() - 1).unwrap(),
+            data
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
