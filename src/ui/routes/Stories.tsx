@@ -1,11 +1,23 @@
-import { createMemo, createResource, For, Show, type JSX } from "solid-js";
+import { createMemo, createResource, createSignal, For, Show, type JSX } from "solid-js";
+import { Portal } from "solid-js/web";
 import { fetchStories, type Story } from "../lib/queries";
 import { ArchiveImage, FramedVideoThumb, isVideoUri } from "../components/ArchiveMedia";
 import { EmptyState } from "../components/EmptyState";
+import { MediaReel } from "../components/MediaReel";
 import { SkeletonGrid } from "../components/Skeleton";
 import { vmediaUrl } from "../lib/media";
 import { useApp } from "../state/app";
-import { viewer, type ViewerItem } from "../state/viewer";
+import { type ViewerItem } from "../state/viewer";
+
+function storyItems(list: Story[]): ViewerItem[] {
+  return list.map((s) => ({
+    kind: isVideoUri(s.uri) ? "video" : "image",
+    src: vmediaUrl(s.uri),
+    caption: s.title || undefined,
+    timestampMs: s.createdAt,
+    source: s.sourceApp === "FB" ? "Story · via Facebook" : "Story",
+  }));
+}
 
 function monthLabel(ms: number): string {
   return new Date(ms).toLocaleDateString(undefined, { year: "numeric", month: "long" });
@@ -49,16 +61,10 @@ export default function Stories(): JSX.Element {
     (id) => fetchStories(id ?? undefined),
   );
 
-  const flat = (): Story[] => stories() ?? [];
-  const viewerItems = createMemo<ViewerItem[]>(() =>
-    flat().map((s) => ({
-      kind: isVideoUri(s.uri) ? "video" : "image",
-      src: vmediaUrl(s.uri),
-      caption: s.title || undefined,
-      timestampMs: s.createdAt,
-    })),
-  );
-  const openAt = (s: Story): void => viewer.open(viewerItems(), flat().indexOf(s));
+  const [reel, setReel] = createSignal<{ items: ViewerItem[]; index: number } | null>(null);
+  const openGroup = (list: Story[], index: number): void => {
+    setReel({ items: storyItems(list), index });
+  };
 
   // Stories arrive newest-first; bucket consecutive ones by month label.
   const groups = createMemo(() => {
@@ -106,7 +112,9 @@ export default function Stories(): JSX.Element {
                 <section class="mb-8">
                   <h2 class="mb-3 text-sm font-medium text-muted">{g.label}</h2>
                   <div class="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6">
-                    <For each={g.items}>{(s) => <StoryCard story={s} onOpen={() => openAt(s)} />}</For>
+                    <For each={g.items}>
+                      {(s, i) => <StoryCard story={s} onOpen={() => openGroup(g.items, i())} />}
+                    </For>
                   </div>
                 </section>
               )}
@@ -114,6 +122,22 @@ export default function Stories(): JSX.Element {
           </Show>
         </Show>
       </div>
+
+      <Show when={reel()}>
+        {(r) => (
+          <Portal>
+            <div class="fixed inset-0 z-50 bg-black">
+              <MediaReel
+                items={r().items}
+                startIndex={r().index}
+                progress="segments"
+                onClose={() => setReel(null)}
+                onEnd={() => setReel(null)}
+              />
+            </div>
+          </Portal>
+        )}
+      </Show>
     </div>
   );
 }

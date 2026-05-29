@@ -14,6 +14,9 @@ export interface ViewerItem {
   poster?: string;
   caption?: string;
   timestampMs?: number;
+  /** Short provenance label shown in the reel/feed chrome, e.g. "Saved", "Story",
+   *  "DM · Alex". Optional; the lightbox (`MediaViewer`) ignores it. */
+  source?: string;
   /** Optional external permalink (e.g. the original Instagram post) — surfaced as
    *  an "Open original" affordance in the viewer chrome. */
   openExternalUrl?: string;
