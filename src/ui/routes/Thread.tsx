@@ -592,25 +592,33 @@ export default function Thread(): JSX.Element {
                   }}
                 >
                   <For each={virtualizer.getVirtualItems()}>
-                    {(vrow) => (
-                      <div
-                        data-index={vrow.index}
-                        ref={(el) => queueMicrotask(() => virtualizer.measureElement(el))}
-                        style={{
-                          position: "absolute",
-                          top: 0,
-                          left: 0,
-                          width: "100%",
-                          transform: `translateY(${vrow.start}px)`,
-                        }}
-                      >
-                        <MessageBubble
-                          row={rows()[vrow.index]!}
-                          group={isGroup()}
-                          openMedia={openMedia}
-                        />
-                      </div>
-                    )}
+                    {(vrow) => {
+                      // When a search filter shrinks the list, the virtualizer can
+                      // briefly hand back indices from the previous (longer) range
+                      // before it reclamps to the new count. Guard so a stale index
+                      // renders nothing for that tick instead of dereferencing an
+                      // undefined row (the virtualizer self-corrects next frame).
+                      const row = () => rows()[vrow.index];
+                      return (
+                        <Show when={row()}>
+                          {(r) => (
+                            <div
+                              data-index={vrow.index}
+                              ref={(el) => queueMicrotask(() => virtualizer.measureElement(el))}
+                              style={{
+                                position: "absolute",
+                                top: 0,
+                                left: 0,
+                                width: "100%",
+                                transform: `translateY(${vrow.start}px)`,
+                              }}
+                            >
+                              <MessageBubble row={r()} group={isGroup()} openMedia={openMedia} />
+                            </div>
+                          )}
+                        </Show>
+                      );
+                    }}
                   </For>
                 </div>
               </Show>
