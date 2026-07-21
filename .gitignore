@@ -32,6 +32,9 @@ Thumbs.db
 # Claude Code per-user local settings (machine paths, local approvals) — never commit
 .claude/settings.local.json
 
+# Superpowers subagent progress ledger — local orchestration state, never commit
+.superpowers/sdd/
+
 # Loose archives / cookies / exports — real data must never be committed (it belongs in data/)
 *.zip
 cookies*.txt
