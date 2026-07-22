@@ -1,6 +1,7 @@
 import { ErrorBoundary, Show, type JSX, type ParentProps } from "solid-js";
 import { useNavigate } from "@solidjs/router";
 import { useApp } from "../state/app";
+import { focusMainContent } from "../lib/shell-ui";
 import Button from "./Button";
 import { Sidebar } from "./Sidebar";
 import { TopBar } from "./TopBar";
@@ -44,7 +45,14 @@ export function Shell(props: ParentProps): JSX.Element {
     >
       <Show when={app.ready()} fallback={<Onboarding />}>
         <div class="flex h-screen overflow-hidden">
-          <a href="#main-content" class="skip-link">
+          <a
+            href="#main-content"
+            class="skip-link"
+            onClick={(event) => {
+              const target = document.getElementById("main-content");
+              if (focusMainContent(target)) event.preventDefault();
+            }}
+          >
             Skip to main content
           </a>
           <Sidebar />
