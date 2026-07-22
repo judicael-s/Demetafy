@@ -40,7 +40,7 @@ const accountLabel = (a: ArchiveAccount): string =>
   a.username ? `@${a.username}` : (a.displayName ?? serviceLabel(a.service));
 
 const LINK_CLASS =
-  "flex items-center gap-3 rounded-lg px-3 py-2 text-sm text-muted transition-colors hover:bg-surface-2 hover:text-ink";
+  "pointer-target flex items-center justify-center gap-3 rounded-lg px-3 py-2 text-sm text-muted transition-colors hover:bg-surface-2 hover:text-ink lg:justify-start";
 
 export function Sidebar(): JSX.Element {
   const app = useApp();
@@ -54,16 +54,16 @@ export function Sidebar(): JSX.Element {
   return (
     <nav
       aria-label="Primary"
-      class="flex w-60 shrink-0 flex-col border-r border-border bg-surface px-3 py-5"
+      class="flex w-20 shrink-0 flex-col border-r border-border bg-surface px-2 py-5 lg:w-60 lg:px-3"
     >
-      <div class="flex items-center gap-2.5 px-3 pb-6">
+      <div class="flex items-center justify-center gap-2.5 pb-6 lg:justify-start lg:px-3">
         <Logo size={32} />
-        <span class="text-xl font-semibold tracking-tight">Demetafy</span>
+        <span class="rail-label text-xl font-semibold tracking-tight">Demetafy</span>
       </div>
 
       <Show when={app.archives().length >= 2}>
         <div
-          class="mb-4 flex flex-col gap-1 rounded-lg bg-surface-2 p-1"
+          class="mb-4 hidden flex-col gap-1 rounded-lg bg-surface-2 p-1 lg:flex"
           role="tablist"
           aria-label="Account"
         >
@@ -90,22 +90,36 @@ export function Sidebar(): JSX.Element {
         </div>
       </Show>
 
-      <ul class="flex flex-1 flex-col gap-1">
+      <ul class="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto">
         <For each={nav()}>
           {(item) => (
             <li>
-              <A href={item.href} end={item.end} class={LINK_CLASS} activeClass="!bg-surface-2 !text-ink">
+              <A
+                href={item.href}
+                end={item.end}
+                title={item.label}
+                aria-label={item.label}
+                class={LINK_CLASS}
+                activeClass="!bg-surface-2 !text-ink"
+              >
                 <Icon name={item.icon} />
-                {item.label}
+                <span class="rail-label">{item.label}</span>
               </A>
             </li>
           )}
         </For>
       </ul>
 
-      <A href="/settings" end class={LINK_CLASS} activeClass="!bg-surface-2 !text-ink">
+      <A
+        href="/settings"
+        end
+        title="Settings"
+        aria-label="Settings"
+        class={LINK_CLASS}
+        activeClass="!bg-surface-2 !text-ink"
+      >
         <Icon name="settings" />
-        Settings
+        <span class="rail-label">Settings</span>
       </A>
     </nav>
   );

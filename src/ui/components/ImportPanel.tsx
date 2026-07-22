@@ -4,6 +4,8 @@ import { useApp } from "../state/app";
 import { IngestError, type IngestProgress } from "../lib/ingest";
 import { fillArchive } from "../lib/downloads";
 import { parseDevArchivePaths, prepareArchiveSelection } from "../lib/import-selection";
+import Button from "./Button";
+import Surface from "./Surface";
 
 interface UiError {
   title: string;
@@ -130,13 +132,13 @@ export function ImportPanel(props: { compact?: boolean }): JSX.Element {
   return (
     <div>
       <Show when={!app.ingesting()} fallback={<ProgressBlock get={progress} />}>
-        <button
+        <Button
+          variant="primary"
           onClick={() => void pick()}
-          class="rounded-lg btn-brand px-5 py-2.5 text-sm font-medium text-accent-ink transition-opacity hover:opacity-90"
-          classList={{ "w-full": !props.compact }}
+          class={props.compact ? undefined : "pointer-target w-full"}
         >
-          {props.compact ? "Choose file(s)…" : "Choose your archive"}
-        </button>
+          {props.compact ? "Choose file(s)…" : "Choose archive"}
+        </Button>
 
         {import.meta.env.DEV && (
           <form
@@ -154,35 +156,31 @@ export function ImportPanel(props: { compact?: boolean }): JSX.Element {
               placeholder="dev: paste one path, or multiple paths separated by ; / new lines"
               class="min-w-0 flex-1 rounded-lg border border-border bg-bg px-3 py-1.5 font-mono text-xs text-ink outline-none placeholder:text-muted focus:border-accent"
             />
-            <button
+            <Button
               type="submit"
+              size="sm"
               disabled={!devPath().trim()}
-              class="shrink-0 rounded-lg border border-border px-3 py-1.5 text-xs text-muted hover:text-ink disabled:opacity-40"
+              class="shrink-0"
             >
               Import path
-            </button>
+            </Button>
           </form>
         )}
 
         <Show when={error()}>
           {(err) => (
-            <div class="mt-5 rounded-lg border border-border bg-surface p-4 text-left">
-              <p class="text-sm font-medium text-ink">{err().title}</p>
-              <p class="mt-1 text-sm text-muted">{err().body}</p>
-              <button
-                onClick={() => void pick()}
-                class="mt-3 rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-surface-2"
-              >
+            <Surface as="div" title={err().title} class="mt-5 !p-4 text-left">
+              <p class="text-sm leading-6 text-muted">{err().body}</p>
+              <Button size="sm" onClick={() => void pick()} class="mt-3">
                 Choose another file
-              </button>
-            </div>
+              </Button>
+            </Surface>
           )}
         </Show>
 
         <Show when={done() && !error()}>
-          <div class="mt-5 rounded-lg border border-border bg-surface p-4 text-left">
-            <p class="text-sm font-medium text-ink">Archive imported ✓</p>
-            <p class="mt-1 text-sm text-muted">
+          <Surface as="div" title="Archive imported ✓" class="mt-5 !p-4 text-left">
+            <p class="text-sm leading-6 text-muted">
               Conversations, stories and profile are ready to browse offline. Saved & shared posts
               are only links — fetch them now to keep them forever (runs in the background; ~40% may
               be unavailable).
@@ -196,14 +194,11 @@ export function ImportPanel(props: { compact?: boolean }): JSX.Element {
                 </p>
               }
             >
-              <button
-                onClick={() => void startFill()}
-                class="mt-3 rounded-lg btn-brand px-4 py-2 text-sm font-medium text-accent-ink transition-opacity hover:opacity-90"
-              >
+              <Button variant="primary" onClick={() => void startFill()} class="mt-3">
                 Download all my posts
-              </button>
+              </Button>
             </Show>
-          </div>
+          </Surface>
         </Show>
       </Show>
     </div>
