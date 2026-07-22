@@ -3,7 +3,7 @@
 /* Semantic theme tokens (Tailwind 4 CSS-first). Dark is the default identity;
    [data-theme="light"] overrides the same vars so utilities like bg-surface
    re-resolve automatically. The toggle lands in Settings (Step 9) / Step 15. */
-@theme {
+@theme static {
   --color-bg: #0a0a0a;
   --color-surface: #161616;
   --color-surface-2: #202020;
@@ -111,11 +111,14 @@
 }
 
 @layer components {
-  /* Primary CTA buttons wear the full Instagram gradient (matches the logo).
-     Pair with text-accent-ink for legible white text. Flat accents — progress
-     bars, active tabs, chat bubbles, focus rings — stay solid via --color-accent. */
+  /* Primary CTAs keep white labels on a solid, contrast-safe accent surface;
+     the Instagram gradient is reserved for their 1px identity border. Flat
+     accents — progress bars, active tabs, chat bubbles, focus rings — stay solid. */
   .btn-brand {
-    background-image: var(--ig-gradient);
+    border: 1px solid transparent;
+    background:
+      linear-gradient(var(--color-accent), var(--color-accent)) padding-box,
+      var(--ig-gradient) border-box;
   }
 }
 
