@@ -1,0 +1,14 @@
+# Task 5 report
+- Base SHA: `2e876eea9398b0d340c42c4a3193033e9053fd0c`.
+- RED: focused media-controls/viewer command failed on missing playback APIs as expected.
+- GREEN: 2 focused files passed, 18 tests total.
+- Final gate: typecheck, 35 files/250 tests, lint, and UI build passed after the canonical status fix.
+- Changed playback settings/state, Viewer/Reel, Settings, Feed, Stories, and all discovered media mappers.
+- Mapper coverage: Albums, Profile, Saved, Posts, Stories, Feed, and Thread.
+- Autoplay defaults off; only the explicit persisted preference enables automatic playback/advance.
+- Reduced motion blocks video autoplay and story-style image/video advance.
+- Stable keys use story/saved/message/post/album/feed/profile namespaces with truthful source routes.
+- Thread audio keeps native controls and uses only `Voice message` plus formatted chronology.
+- Manual limit: no Computer Use/CUA run; root owns the synthetic exact-window smoke.
+- Self-review: complete scoped diff inspected; raw paths/private archive values are absent from new errors/copy.
+- Commit: `feat(media): add user-controlled accessible playback` (SHA recorded by Git).

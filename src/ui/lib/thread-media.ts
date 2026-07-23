@@ -12,19 +12,49 @@ const VIDEO_RE = /\.(mp4|mov|webm|m4v)$/i;
  * shared post that has been downloaded (dmedia). Audio and not-yet-downloaded
  * shares are excluded — there's nothing to show full-screen.
  */
-export function threadMediaItems(messages: ThreadMessage[]): ViewerItem[] {
+export function threadMediaItems(
+  messages: ThreadMessage[],
+  sourceRoute: { label: string; href: string } = { label: "Messages", href: "/dms" },
+): ViewerItem[] {
   const out: ViewerItem[] = [];
   for (const m of messages) {
-    for (const u of m.media.photos) out.push({ kind: "image", src: vmediaUrl(u), timestampMs: m.timestampMs });
-    for (const u of m.media.gifs) out.push({ kind: "image", src: vmediaUrl(u), timestampMs: m.timestampMs });
-    for (const u of m.media.videos) out.push({ kind: "video", src: vmediaUrl(u), timestampMs: m.timestampMs });
+    let ordinal = 0;
+    for (const u of m.media.photos) {
+      out.push({
+        key: `message:${m.id}:${ordinal++}`,
+        kind: "image",
+        src: vmediaUrl(u),
+        timestampMs: m.timestampMs,
+        sourceRoute,
+      });
+    }
+    for (const u of m.media.gifs) {
+      out.push({
+        key: `message:${m.id}:${ordinal++}`,
+        kind: "image",
+        src: vmediaUrl(u),
+        timestampMs: m.timestampMs,
+        sourceRoute,
+      });
+    }
+    for (const u of m.media.videos) {
+      out.push({
+        key: `message:${m.id}:${ordinal++}`,
+        kind: "video",
+        src: vmediaUrl(u),
+        timestampMs: m.timestampMs,
+        sourceRoute,
+      });
+    }
     if (m.media.share && m.localPath) {
       out.push({
+        key: `message:${m.id}:${ordinal}`,
         kind: VIDEO_RE.test(m.localPath) ? "video" : "image",
         src: dmediaUrl(m.localPath),
         poster: m.thumbPath ? dmediaUrl(m.thumbPath) : undefined,
         caption: m.media.share.shareText || undefined,
         timestampMs: m.timestampMs,
+        sourceRoute,
       });
     }
   }

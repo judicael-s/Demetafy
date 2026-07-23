@@ -9,6 +9,8 @@ import {
 } from "solid-js";
 import type { ViewerItem } from "../state/viewer";
 import { openExternal } from "../lib/external";
+import { shouldHandleMediaShortcut } from "../lib/media-controls";
+import { useApp } from "../state/app";
 
 /** Per-image dwell before auto-advancing (videos advance on `ended`). */
 const IMAGE_MS = 5000;
@@ -26,6 +28,9 @@ export interface MediaReelProps {
   onClose?: () => void;
   /** Called when advancing past the last item. Defaults to looping to the start. */
   onEnd?: () => void;
+  autoplay?: boolean;
+  onIndexChange?: (index: number, item: ViewerItem) => void;
+  resetKey?: string;
 }
 
 function fmtTime(ms: number): string {
@@ -47,11 +52,12 @@ const prefersReducedMotion = (): boolean =>
  * disabling autoplay and auto-advance (manual only).
  */
 export function MediaReel(props: MediaReelProps): JSX.Element {
+  const app = useApp();
   const reduced = prefersReducedMotion();
   const [index, setIndex] = createSignal(props.startIndex ?? 0);
   const [muted, setMuted] = createSignal(true);
-  // Reduced-motion starts paused (no autoplay/auto-advance) until a user gesture.
-  const [paused, setPaused] = createSignal(reduced);
+  const autoAdvance = (): boolean => props.autoplay === true && !reduced;
+  const [paused, setPaused] = createSignal(!autoAdvance());
   const [prog, setProg] = createSignal(0); // 0..1 for the current item
 
   let containerEl: HTMLDivElement | undefined;
@@ -62,13 +68,27 @@ export function MediaReel(props: MediaReelProps): JSX.Element {
   const nextItem = (): ViewerItem | undefined => props.items[index() + 1];
   const useSegments = (): boolean => props.progress === "segments" && len() <= SEGMENT_MAX;
 
-  // Reset to the start when the item set is swapped (shuffle, account switch).
+  // Appending media keeps the current position. Only an explicit context change resets it.
   createEffect(
     on(
-      () => props.items,
+      () => props.resetKey,
       () => setIndex(props.startIndex ?? 0),
       { defer: true },
     ),
+  );
+  createEffect(() => {
+    const enabled = props.autoplay === true;
+    setPaused(!(enabled && !reduced));
+  });
+  createEffect(() => {
+    const last = len() - 1;
+    if (index() > last) setIndex(Math.max(0, last));
+  });
+  createEffect(
+    on(index, (i) => {
+      const item = props.items[i];
+      if (item) props.onIndexChange?.(i, item);
+    }),
   );
 
   function next(): void {
@@ -81,15 +101,13 @@ export function MediaReel(props: MediaReelProps): JSX.Element {
     setIndex((i) => Math.max(0, i - 1));
   }
 
-  // Per-slide lifecycle: reset progress, then (unless reduced-motion) run the image
-  // dwell timer. Video progress/advance is driven by the element's own events.
+  // Per-slide lifecycle: automatic video playback and image dwell both require
+  // explicit autoplay opt-in, and reduced motion always wins.
   createEffect(
-    on(index, () => {
+    on([index, autoAdvance], ([i, automatic]) => {
       setProg(0);
-      setPaused(reduced);
-      if (reduced) return;
-      const it = props.items[index()];
-      if (it?.kind === "image") startImageTimer();
+      setPaused(!automatic);
+      if (automatic && props.items[i]?.kind === "image") startImageTimer();
     }),
   );
 
@@ -139,12 +157,13 @@ export function MediaReel(props: MediaReelProps): JSX.Element {
           prev();
           break;
         case " ":
+          if (!shouldHandleMediaShortcut(e.target)) break;
           e.preventDefault();
           setPaused((p) => !p);
           break;
         case "m":
         case "M":
-          setMuted((m) => !m);
+          if (shouldHandleMediaShortcut(e.target)) setMuted((m) => !m);
           break;
       }
     };
@@ -253,7 +272,7 @@ export function MediaReel(props: MediaReelProps): JSX.Element {
                   ref={(el) => (videoEl = el)}
                   src={it().src}
                   poster={it().poster}
-                  autoplay={!reduced}
+                  autoplay={autoAdvance()}
                   muted={muted()}
                   playsinline
                   preload="metadata"
@@ -266,7 +285,7 @@ export function MediaReel(props: MediaReelProps): JSX.Element {
                     if (!paused()) void e.currentTarget.play().catch(() => {});
                   }}
                   onEnded={() => {
-                    if (!reduced) next();
+                    if (autoAdvance()) next();
                   }}
                 />
               </Show>
@@ -313,6 +332,30 @@ export function MediaReel(props: MediaReelProps): JSX.Element {
 
       {/* Top-right controls */}
       <div class="absolute right-2 top-4 z-20 flex items-center gap-2">
+        <button
+          type="button"
+          aria-label={paused() ? "Play" : "Pause"}
+          aria-pressed={!paused()}
+          class="rounded-full bg-white/10 px-3 py-1.5 text-xs text-white hover:bg-white/20"
+          onClick={() => setPaused((p) => !p)}
+        >
+          {paused() ? "Play" : "Pause"}
+        </button>
+        <button
+          type="button"
+          aria-label={`Autoplay ${autoAdvance() ? "On" : "Off"}`}
+          aria-pressed={autoAdvance()}
+          disabled={reduced}
+          title={reduced ? "Autoplay is unavailable while reduced motion is enabled." : undefined}
+          class="rounded-full bg-white/10 px-3 py-1.5 text-xs text-white hover:bg-white/20 disabled:opacity-60"
+          onClick={() => {
+            const next = props.autoplay !== true;
+            app.setAutoplay(next);
+            setPaused(!(next && !reduced));
+          }}
+        >
+          Autoplay {autoAdvance() ? "On" : "Off"}
+        </button>
         <Show when={cur()?.kind === "video"}>
           <button
             type="button"

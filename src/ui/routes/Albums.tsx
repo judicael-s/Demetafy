@@ -11,11 +11,13 @@ import Surface from '../components/Surface';
 import { formatArchiveTimestamp } from '../lib/presentation';
 
 function viewerItems(album: FacebookAlbum): ViewerItem[] {
-  return album.photos.map((p) => ({
+  return album.photos.map((p, ordinal) => ({
+    key: `album:${album.id}:${ordinal}`,
     kind: isVideoUri(p.uri) ? 'video' : 'image',
     src: vmediaUrl(p.uri),
     caption: p.description ?? p.title ?? album.name,
     timestampMs: p.createdAt ?? undefined,
+    sourceRoute: { label: album.name || 'Album', href: '/albums' },
   }));
 }
 

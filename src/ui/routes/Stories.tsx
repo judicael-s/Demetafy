@@ -13,11 +13,13 @@ import { formatArchiveMonth, formatArchiveTimestamp } from '../lib/presentation'
 
 function storyItems(list: Story[]): ViewerItem[] {
   return list.map((s) => ({
+    key: `story:${s.createdAt}:${s.uri}`,
     kind: isVideoUri(s.uri) ? 'video' : 'image',
     src: vmediaUrl(s.uri),
     caption: s.title || undefined,
     timestampMs: s.createdAt,
     source: s.sourceApp === 'FB' ? 'Story · via Facebook' : 'Story',
+    sourceRoute: { label: 'Stories', href: '/stories' },
   }));
 }
 
@@ -138,6 +140,8 @@ export default function Stories(): JSX.Element {
                 items={r().items}
                 startIndex={r().index}
                 progress="segments"
+                autoplay={app.autoplay()}
+                resetKey={r().items[0]?.key ?? 'stories'}
                 onClose={() => setReel(null)}
                 onEnd={() => setReel(null)}
               />

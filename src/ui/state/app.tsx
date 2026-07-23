@@ -17,6 +17,7 @@ import {
   type ProfileRow,
 } from "../lib/queries";
 import { setMediaArchive } from "../lib/media";
+import { getAutoplayEnabled, setAutoplayEnabled } from "../lib/settings";
 
 export interface Toast {
   id: number;
@@ -41,12 +42,14 @@ export interface AppStore {
   /** Distinct imported services (drives the "import your other data" prompts). */
   services: Accessor<string[]>;
   toasts: Accessor<Toast[]>;
+  autoplay: Accessor<boolean>;
   refresh: () => Promise<void>;
   ingest: (paths: string | string[], onProgress?: ProgressFn) => Promise<void>;
   /** Flip the active account and re-scope all cached data. */
   setActiveArchive: (id: number) => Promise<void>;
   pushToast: (kind: Toast["kind"], message: string) => void;
   dismissToast: (id: number) => void;
+  setAutoplay: (on: boolean) => void;
 }
 
 const AppContext = createContext<AppStore>();
@@ -59,6 +62,7 @@ export function AppProvider(props: ParentProps) {
   const [archives, setArchives] = createSignal<ArchiveAccount[]>([]);
   const [activeArchiveId, setActiveId] = createSignal<number | null>(null);
   const [toasts, setToasts] = createSignal<Toast[]>([]);
+  const [autoplay, setAutoplaySignal] = createSignal(getAutoplayEnabled());
 
   const ready = () => (overview()?.archives ?? 0) > 0;
 
@@ -79,6 +83,10 @@ export function AppProvider(props: ParentProps) {
     }
   };
   const dismissToast = (id: number) => setToasts((t) => t.filter((x) => x.id !== id));
+  const setAutoplay = (on: boolean): void => {
+    setAutoplayEnabled(on);
+    setAutoplaySignal(on);
+  };
 
   async function refresh(selectNewest = false) {
     const list = await fetchArchives();
@@ -157,11 +165,13 @@ export function AppProvider(props: ParentProps) {
     activeService,
     services,
     toasts,
+    autoplay,
     refresh,
     ingest,
     setActiveArchive,
     pushToast,
     dismissToast,
+    setAutoplay,
   };
 
   return <AppContext.Provider value={store}>{props.children}</AppContext.Provider>;

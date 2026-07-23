@@ -9,13 +9,22 @@ import {
   type JSX,
 } from "solid-js";
 import { Portal } from "solid-js/web";
+import { A } from "@solidjs/router";
 import { viewer, type ViewerItem } from "../state/viewer";
 import { downloadQueue } from "../lib/downloads";
-import { effStatusFor, effLocalPathFor, effThumbPathFor, statusLabel } from "../lib/download-ui";
+import {
+  effStatusFor,
+  effLocalPathFor,
+  effThumbPathFor,
+  isDownloaded,
+  statusLabel,
+} from "../lib/download-ui";
 import { isVideoUri } from "./ArchiveMedia";
 import { PhoneFrame, createOrientation } from "./PhoneFrame";
 import { dmediaUrl } from "../lib/media";
 import { openExternal } from "../lib/external";
+import { shouldHandleMediaShortcut } from "../lib/media-controls";
+import { useApp } from "../state/app";
 
 interface ResolvedMedia {
   kind: "image" | "video";
@@ -47,7 +56,26 @@ function fmtTime(ms: number): string {
   return new Date(ms).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
 }
 
+const ARCHIVE_UNAVAILABLE = "This archive media entry is unavailable.";
+const DOWNLOAD_MISSING = "This downloaded file is missing.";
+const UNSUPPORTED_FORMAT = "This media format is not supported.";
+const PLAYBACK_FAILED = "Playback failed. Try closing the viewer and opening this item again.";
+
+function mediaFailure(src: string, media?: HTMLMediaElement): string {
+  if (media?.error?.code === 4) return UNSUPPORTED_FORMAT;
+  if (src.startsWith("vmedia:")) return ARCHIVE_UNAVAILABLE;
+  if (src.startsWith("dmedia:")) return DOWNLOAD_MISSING;
+  return PLAYBACK_FAILED;
+}
+
+const prefersReducedMotion = (): boolean =>
+  typeof window !== "undefined" &&
+  typeof window.matchMedia === "function" &&
+  window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
 export function MediaViewer(): JSX.Element {
+  const app = useApp();
+  const reduced = prefersReducedMotion();
   const cur = createMemo(() => viewer.state.items[viewer.state.index]);
   const resolved = createMemo(() => resolveItem(cur()));
   const nextResolved = createMemo(() => resolveItem(viewer.state.items[viewer.state.index + 1]));
@@ -65,6 +93,7 @@ export function MediaViewer(): JSX.Element {
 
   const [muted, setMuted] = createSignal(false);
   const [shown, setShown] = createSignal(false);
+  const [mediaError, setMediaError] = createSignal<string | null>(null);
   const { orientation, measure, reset: resetOrientation } = createOrientation();
   let videoEl: HTMLVideoElement | undefined;
   let overlayEl: HTMLDivElement | undefined;
@@ -78,7 +107,10 @@ export function MediaViewer(): JSX.Element {
 
   // Re-detect orientation per slide: reset to portrait when the index changes, then
   // the freshly-mounted media's onLoadedMetadata reports its true shape.
-  createEffect(on(() => viewer.state.index, () => resetOrientation()));
+  createEffect(on(() => viewer.state.index, () => {
+    resetOrientation();
+    setMediaError(null);
+  }));
 
   // Body scroll lock + focus management tied to open state.
   createEffect(() => {
@@ -128,18 +160,20 @@ export function MediaViewer(): JSX.Element {
           viewer.prev();
           break;
         case " ":
-          if (resolved()?.kind !== "video") break;
+          if (!shouldHandleMediaShortcut(e.target) || resolved()?.kind !== "video") break;
           e.preventDefault();
-          if (videoEl?.paused) void videoEl.play();
+          if (videoEl?.paused) void videoEl.play().catch(() => setMediaError(PLAYBACK_FAILED));
           else videoEl?.pause();
           break;
         case "f":
         case "F":
-          if (resolved()?.kind === "video") void videoEl?.requestFullscreen?.();
+          if (shouldHandleMediaShortcut(e.target) && resolved()?.kind === "video") {
+            void videoEl?.requestFullscreen?.();
+          }
           break;
         case "m":
         case "M":
-          setMuted((v) => !v);
+          if (shouldHandleMediaShortcut(e.target)) setMuted((v) => !v);
           break;
         case "Tab":
           trapTab(e);
@@ -202,9 +236,27 @@ export function MediaViewer(): JSX.Element {
             class="absolute inset-x-0 top-0 flex items-center justify-between p-4 text-white/90"
             onClick={(e) => e.stopPropagation()}
           >
-            <span class="rounded-full bg-white/10 px-3 py-1 text-sm tabular-nums">
-              {viewer.state.index + 1} / {count()}
-            </span>
+            <div class="flex items-center gap-2">
+              <span
+                role="status"
+                aria-live="polite"
+                aria-atomic="true"
+                class="rounded-full bg-white/10 px-3 py-1 text-sm tabular-nums"
+              >
+                {viewer.state.index + 1} / {count()}
+              </span>
+              <Show when={cur()?.sourceRoute}>
+                {(route) => (
+                  <A
+                    href={route().href}
+                    class="rounded-full bg-white/10 px-3 py-1 text-sm hover:bg-white/20"
+                    onClick={() => viewer.close()}
+                  >
+                    Back to {route().label}
+                  </A>
+                )}
+              </Show>
+            </div>
             <div class="flex items-center gap-2">
               <Show when={cur()?.openExternalUrl}>
                 {(url) => (
@@ -229,11 +281,12 @@ export function MediaViewer(): JSX.Element {
           </div>
 
           {/* Prev / Next */}
-          <Show when={viewer.state.index > 0}>
+          <Show when={true}>
             <button
               type="button"
               aria-label="Previous"
-              class="absolute left-3 top-1/2 z-10 flex size-11 -translate-y-1/2 items-center justify-center rounded-full bg-white/10 text-2xl text-white hover:bg-white/20"
+              disabled={viewer.state.index === 0}
+              class="absolute left-3 top-1/2 z-10 flex size-11 -translate-y-1/2 items-center justify-center rounded-full bg-white/10 text-2xl text-white hover:bg-white/20 disabled:opacity-35"
               onClick={(e) => {
                 e.stopPropagation();
                 viewer.prev();
@@ -242,11 +295,12 @@ export function MediaViewer(): JSX.Element {
               ‹
             </button>
           </Show>
-          <Show when={viewer.state.index < count() - 1}>
+          <Show when={true}>
             <button
               type="button"
               aria-label="Next"
-              class="absolute right-3 top-1/2 z-10 flex size-11 -translate-y-1/2 items-center justify-center rounded-full bg-white/10 text-2xl text-white hover:bg-white/20"
+              disabled={viewer.state.index >= count() - 1}
+              class="absolute right-3 top-1/2 z-10 flex size-11 -translate-y-1/2 items-center justify-center rounded-full bg-white/10 text-2xl text-white hover:bg-white/20 disabled:opacity-35"
               onClick={(e) => {
                 e.stopPropagation();
                 viewer.next();
@@ -266,18 +320,32 @@ export function MediaViewer(): JSX.Element {
                 torn down. Progress ticks don't recreate it (index is stable). */}
             <Show when={viewer.state.index + 1} keyed>
               <Show
-                when={resolved()}
+                when={!mediaError() && resolved()}
                 fallback={
                   <div class="flex flex-col items-center gap-3 rounded-xl border border-white/15 bg-white/5 px-8 py-10 text-center text-white/80">
-                    <p class="text-sm">
+                    <p
+                      class="text-sm"
+                      role={mediaError() || isDownloaded(status()) ? "alert" : undefined}
+                    >
                       <Show
-                        when={status() === "loginWalled"}
-                        fallback="This post isn't downloaded yet."
+                        when={mediaError()}
+                        fallback={
+                          <Show
+                            when={status() === "loginWalled"}
+                            fallback={
+                              isDownloaded(status())
+                                ? DOWNLOAD_MISSING
+                                : "This post isn't downloaded yet."
+                            }
+                          >
+                            Needs a logged-in session — add a cookies file in Settings.
+                          </Show>
+                        }
                       >
-                        Needs a logged-in session — add a cookies file in Settings.
+                        {(message) => message()}
                       </Show>
                     </p>
-                    <Show when={cur()?.download}>
+                    <Show when={!mediaError() && cur()?.download}>
                       <button
                         type="button"
                         disabled={busy()}
@@ -301,6 +369,7 @@ export function MediaViewer(): JSX.Element {
                         src={r().src}
                         alt={cur()?.caption ?? ""}
                         class="max-h-[82vh] max-w-full rounded-lg object-contain"
+                        onError={() => setMediaError(mediaFailure(r().src))}
                       />
                     }
                   >
@@ -309,10 +378,11 @@ export function MediaViewer(): JSX.Element {
                         ref={(el) => (videoEl = el)}
                         src={r().src}
                         poster={r().poster}
-                        autoplay
+                        autoplay={app.autoplay() && !reduced}
                         controls
                         muted={muted()}
                         onLoadedMetadata={(e) => measure(e.currentTarget)}
+                        onError={(e) => setMediaError(mediaFailure(r().src, e.currentTarget))}
                         class="block max-h-[78vh] max-w-full"
                       />
                     </PhoneFrame>

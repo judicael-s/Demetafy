@@ -79,7 +79,12 @@ export default function Profile(): JSX.Element {
                       class="block h-full w-full transition-opacity hover:opacity-90"
                       onClick={() =>
                         viewer.open(
-                          [{ kind: 'image', src: vmediaUrl(prof().profile_photo_uri!) }],
+                          [{
+                            key: `profile:${app.activeArchiveId() ?? 'active'}:photo`,
+                            kind: 'image',
+                            src: vmediaUrl(prof().profile_photo_uri!),
+                            sourceRoute: { label: 'Profile', href: '/profile' },
+                          }],
                           0,
                         )
                       }

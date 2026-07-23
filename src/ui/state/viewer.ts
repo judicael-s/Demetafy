@@ -8,15 +8,18 @@
 import { createStore } from "solid-js/store";
 
 export interface ViewerItem {
+  /** Stable, namespaced identity used across navigation and reactive updates. */
+  key: string;
   kind: "image" | "video";
   /** Resolved vmedia/dmedia URL. Absent => not yet downloaded; see `download`. */
   src?: string;
   poster?: string;
   caption?: string;
   timestampMs?: number;
-  /** Short provenance label shown in the reel/feed chrome, e.g. "Saved", "Story",
-   *  "DM · Alex". Optional; the lightbox (`MediaViewer`) ignores it. */
+  /** Short provenance label shown in reel/feed chrome, e.g. "Saved" or "Story". */
   source?: string;
+  /** Truthful in-app route where this media came from. */
+  sourceRoute?: { label: string; href: string };
   /** Optional external permalink (e.g. the original Instagram post) — surfaced as
    *  an "Open original" affordance in the viewer chrome. */
   openExternalUrl?: string;

@@ -66,6 +66,7 @@ function MediaItem(props: {
   uri: string;
   kind: 'image' | 'video' | 'audio';
   onOpen?: () => void;
+  timestampMs?: number;
 }): JSX.Element {
   const [failed, setFailed] = createSignal(false);
   const url = () => vmediaUrl(props.uri);
@@ -94,7 +95,13 @@ function MediaItem(props: {
           </button>
         </Match>
         <Match when={props.kind === 'audio'}>
-          <audio src={url()} controls class="w-full" onError={() => setFailed(true)} />
+          <audio
+            src={url()}
+            controls
+            aria-label={`Voice message · ${formatArchiveTimestamp(props.timestampMs)}`}
+            class="w-full"
+            onError={() => setFailed(true)}
+          />
         </Match>
       </Switch>
     </Show>
@@ -315,7 +322,9 @@ function MessageBubble(props: {
                   <For each={m().media.videos}>
                     {(u) => <MediaItem uri={u} kind="video" onOpen={() => props.openMedia(u)} />}
                   </For>
-                  <For each={m().media.audio}>{(u) => <MediaItem uri={u} kind="audio" />}</For>
+                  <For each={m().media.audio}>
+                    {(u) => <MediaItem uri={u} kind="audio" timestampMs={m().timestampMs} />}
+                  </For>
                 </div>
               </Show>
 
@@ -408,7 +417,12 @@ export default function Thread(): JSX.Element {
 
   // All thread media flattened once, for the gallery + inline bubble taps; a
   // tapped item opens the shared viewer at its position (matched by resolved src).
-  const threadItems = createMemo(() => threadMediaItems(detailValue()?.messages ?? []));
+  const threadItems = createMemo(() =>
+    threadMediaItems(detailValue()?.messages ?? [], {
+      label: 'Conversation',
+      href: `/dms/${encodeURIComponent(slug())}`,
+    }),
+  );
   const openMedia = (uri: string): void => {
     const src = vmediaUrl(uri);
     const idx = threadItems().findIndex((i) => i.src === src);

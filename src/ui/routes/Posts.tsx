@@ -18,12 +18,19 @@ function fmtSize(bytes: number | null): string {
     : `${Math.round(bytes / 1024)} KB`;
 }
 
-function mediaItem(uri: string, caption?: string, timestampMs?: number | null): ViewerItem {
+function mediaItem(
+  uri: string,
+  key: string,
+  caption?: string,
+  timestampMs?: number | null,
+): ViewerItem {
   return {
+    key,
     kind: isVideoUri(uri) ? 'video' : 'image',
     src: vmediaUrl(uri),
     caption,
     timestampMs: timestampMs ?? undefined,
+    sourceRoute: { label: 'Posts', href: '/posts' },
   };
 }
 
@@ -40,7 +47,14 @@ function FacebookPosts(): JSX.Element {
   };
 
   const itemsFor = (post: FacebookPost): ViewerItem[] =>
-    post.media.map((m) => mediaItem(m.uri, post.text || post.title, m.createdAt ?? post.createdAt));
+    post.media.map((m, ordinal) =>
+      mediaItem(
+        m.uri,
+        `post:${post.id}:${ordinal}`,
+        post.text || post.title,
+        m.createdAt ?? post.createdAt,
+      ),
+    );
 
   return (
     <div class="flex h-full flex-col">
@@ -149,7 +163,9 @@ function InstagramPosts(): JSX.Element {
     return posts() ?? [];
   };
 
-  const viewerItems = createMemo<ViewerItem[]>(() => postList().map((p) => mediaItem(p.uri)));
+  const viewerItems = createMemo<ViewerItem[]>(() =>
+    postList().map((p, ordinal) => mediaItem(p.uri, `post:${p.mediaId}:${ordinal}`)),
+  );
 
   return (
     <div class="flex h-full flex-col">

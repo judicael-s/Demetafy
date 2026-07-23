@@ -64,7 +64,12 @@ export default function Feed(): JSX.Element {
             </div>
           }
         >
-          <MediaReel items={items()} progress="single" />
+          <MediaReel
+            items={items()}
+            progress="single"
+            autoplay={app.autoplay()}
+            resetKey={`${app.activeArchiveId() ?? 'none'}:${order()}:${seed()}`}
+          />
 
           {/* Order toggle (small chips → flat bg-accent per branding) */}
           <div class="absolute left-3 top-3 z-30 flex gap-1 rounded-full bg-black/40 p-1">

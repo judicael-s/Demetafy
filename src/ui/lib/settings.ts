@@ -8,6 +8,7 @@
 const PARALLEL_KEY = "demetafy-dl-parallel";
 const COOKIES_KEY = "demetafy-cookies-path";
 const FETCH_AVATARS_KEY = "demetafy-fetch-avatars";
+const AUTOPLAY_KEY = "demetafy-autoplay";
 
 /** Concurrent yt-dlp downloads, clamped 1–3. Default 1: Instagram 429s fast
  *  above one concurrent stream (Phase 0 finding). */
@@ -41,4 +42,18 @@ export function getFetchAvatarsEnabled(): boolean {
 export function setFetchAvatarsEnabled(on: boolean): void {
   if (on) localStorage.setItem(FETCH_AVATARS_KEY, "1");
   else localStorage.removeItem(FETCH_AVATARS_KEY);
+}
+
+/** Playback is opt-in. Missing and unrecognized values remain safely off. */
+export function getAutoplayEnabled(
+  storage: Pick<Storage, "getItem"> = localStorage,
+): boolean {
+  return storage.getItem(AUTOPLAY_KEY) === "1";
+}
+
+export function setAutoplayEnabled(
+  on: boolean,
+  storage: Pick<Storage, "setItem"> = localStorage,
+): void {
+  storage.setItem(AUTOPLAY_KEY, on ? "1" : "0");
 }

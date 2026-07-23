@@ -2,7 +2,12 @@ import { describe, expect, it } from "vitest";
 import { createViewer, type ViewerItem } from "./viewer";
 
 const items = (n: number): ViewerItem[] =>
-  Array.from({ length: n }, (_, i) => ({ kind: "image" as const, src: `s${i}` }));
+  Array.from({ length: n }, (_, i) => ({
+    key: `test:${i}`,
+    kind: "image" as const,
+    src: `s${i}`,
+    sourceRoute: { label: "Test source", href: "/test" },
+  }));
 
 describe("createViewer", () => {
   it("starts closed and empty", () => {
@@ -41,6 +46,20 @@ describe("createViewer", () => {
     expect(v.state.index).toBe(1);
     v.next();
     expect(v.state.index).toBe(1);
+  });
+
+  it("preserves stable keys and source routes through open, next, and prev", () => {
+    const v = createViewer();
+    const original = items(3);
+    v.open(original, 1);
+    expect(v.state.items[v.state.index]).toMatchObject({
+      key: "test:1",
+      sourceRoute: { label: "Test source", href: "/test" },
+    });
+    v.next();
+    expect(v.state.items[v.state.index]?.key).toBe("test:2");
+    v.prev();
+    expect(v.state.items[v.state.index]).toBe(original[1]);
   });
 
   it("goTo() clamps", () => {

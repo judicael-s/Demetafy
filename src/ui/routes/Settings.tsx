@@ -159,10 +159,21 @@ export default function Settings(): JSX.Element {
         </Surface>
 
         <Surface title="Playback">
-          <p class="text-sm leading-6 text-muted">
-            Playback controls stay with the media you open. Reduced-motion preferences are
-            respected, and you can pause or move manually at any time.
-          </p>
+          <div class={rowClass}>
+            <div>
+              <p class="text-sm font-medium text-ink">Autoplay</p>
+              <p class="mt-1 text-xs leading-5 text-muted">
+                Off by default. When on, videos and story-style sequences advance automatically.
+              </p>
+            </div>
+            <Button
+              variant={app.autoplay() ? 'primary' : 'secondary'}
+              aria-pressed={app.autoplay()}
+              onClick={() => app.setAutoplay(!app.autoplay())}
+            >
+              {app.autoplay() ? 'On' : 'Off'}
+            </Button>
+          </div>
         </Surface>
 
         <Surface title="Downloads & cookies">

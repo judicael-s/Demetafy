@@ -223,10 +223,12 @@ export default function Saved(): JSX.Element {
   // the "Download to view" CTA + dwell auto-enqueue) from the live queue/DB.
   const viewerItems = createMemo<ViewerItem[]>(() =>
     list().map((it) => ({
+      key: `saved:${it.id}`,
       kind: 'video',
       caption: it.caption || undefined,
       timestampMs: it.savedAt,
       openExternalUrl: it.url,
+      sourceRoute: { label: 'Saved', href: '/saved' },
       download: {
         key: itemKey('saved', it.id),
         enqueue: () =>
