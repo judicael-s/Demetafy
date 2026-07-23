@@ -1,29 +1,26 @@
-import { createMemo, createResource, For, Show, type JSX } from "solid-js";
-import { ArchiveImage, FramedVideoThumb, isVideoUri } from "../components/ArchiveMedia";
-import { EmptyState } from "../components/EmptyState";
-import { SkeletonGrid, SkeletonList } from "../components/Skeleton";
-import { fetchOwnPosts, fetchPosts, type FacebookPost } from "../lib/queries";
-import { vmediaUrl } from "../lib/media";
-import { openExternal } from "../lib/external";
-import { useApp } from "../state/app";
-import { viewer, type ViewerItem } from "../state/viewer";
+import { createMemo, createResource, For, Show, type JSX } from 'solid-js';
+import { ArchiveImage, FramedVideoThumb, isVideoUri } from '../components/ArchiveMedia';
+import { EmptyState } from '../components/EmptyState';
+import { SkeletonGrid, SkeletonList } from '../components/Skeleton';
+import { fetchOwnPosts, fetchPosts, type FacebookPost } from '../lib/queries';
+import { vmediaUrl } from '../lib/media';
+import { openExternal } from '../lib/external';
+import { useApp } from '../state/app';
+import { viewer, type ViewerItem } from '../state/viewer';
+import PageHeader from '../components/PageHeader';
+import Surface from '../components/Surface';
+import { DATE_UNAVAILABLE, formatArchiveTimestamp } from '../lib/presentation';
 
 function fmtSize(bytes: number | null): string {
-  if (bytes == null) return "";
+  if (bytes == null) return '';
   return bytes >= 1024 * 1024
     ? `${(bytes / 1024 / 1024).toFixed(1)} MB`
     : `${Math.round(bytes / 1024)} KB`;
 }
 
-function fmtDate(msOrSec: number | null): string {
-  if (!msOrSec) return "";
-  const ms = msOrSec < 10_000_000_000 ? msOrSec * 1000 : msOrSec;
-  return new Date(ms).toLocaleString();
-}
-
 function mediaItem(uri: string, caption?: string, timestampMs?: number | null): ViewerItem {
   return {
-    kind: isVideoUri(uri) ? "video" : "image",
+    kind: isVideoUri(uri) ? 'video' : 'image',
     src: vmediaUrl(uri),
     caption,
     timestampMs: timestampMs ?? undefined,
@@ -37,22 +34,31 @@ function FacebookPosts(): JSX.Element {
     (id) => fetchPosts(id ?? undefined),
   );
 
+  const postList = () => {
+    if (posts.error) throw posts.error;
+    return posts() ?? [];
+  };
+
   const itemsFor = (post: FacebookPost): ViewerItem[] =>
     post.media.map((m) => mediaItem(m.uri, post.text || post.title, m.createdAt ?? post.createdAt));
 
   return (
     <div class="flex h-full flex-col">
-      <div class="shrink-0 border-b border-border px-8 py-5">
-        <h1 class="text-2xl font-semibold tracking-tight">Posts</h1>
-        <Show when={posts()}>
-          <p class="mt-1 text-sm text-muted">{posts()!.length} timeline posts</p>
-        </Show>
+      <div class="shrink-0 px-8 pt-5">
+        <PageHeader
+          title="Posts"
+          description={
+            posts.loading
+              ? 'Loading timeline posts…'
+              : `${postList().length.toLocaleString()} timeline posts`
+          }
+        />
       </div>
 
       <div class="min-h-0 flex-1 overflow-y-auto px-8 py-5">
         <Show when={!posts.loading} fallback={<SkeletonList rows={5} rowClass="h-40" />}>
           <Show
-            when={(posts()?.length ?? 0) > 0}
+            when={postList().length > 0}
             fallback={
               <EmptyState
                 icon="posts"
@@ -62,12 +68,14 @@ function FacebookPosts(): JSX.Element {
             }
           >
             <div class="space-y-4">
-              <For each={posts()}>
+              <For each={postList()}>
                 {(post) => {
                   const items = () => itemsFor(post);
                   return (
-                    <article class="rounded-xl border border-border bg-surface p-4">
-                      <div class="mb-3 text-xs text-muted">{fmtDate(post.createdAt)}</div>
+                    <Surface as="div" class="!p-4">
+                      <div class="mb-3 text-xs text-muted">
+                        {formatArchiveTimestamp(post.createdAt, { explainMissing: true })}
+                      </div>
                       <Show when={post.title}>
                         <h2 class="mb-2 text-sm font-medium text-ink">{post.title}</h2>
                       </Show>
@@ -103,16 +111,21 @@ function FacebookPosts(): JSX.Element {
                               >
                                 <Show
                                   when={isVideoUri(m.uri)}
-                                  fallback={<ArchiveImage uri={m.uri} class="h-full w-full object-cover" />}
+                                  fallback={
+                                    <ArchiveImage uri={m.uri} class="h-full w-full object-cover" />
+                                  }
                                 >
-                                  <FramedVideoThumb src={vmediaUrl(m.uri)} class="absolute inset-0" />
+                                  <FramedVideoThumb
+                                    src={vmediaUrl(m.uri)}
+                                    class="absolute inset-0"
+                                  />
                                 </Show>
                               </button>
                             )}
                           </For>
                         </div>
                       </Show>
-                    </article>
+                    </Surface>
                   );
                 }}
               </For>
@@ -131,29 +144,36 @@ function InstagramPosts(): JSX.Element {
     (id) => fetchOwnPosts(id ?? undefined),
   );
 
-  const viewerItems = createMemo<ViewerItem[]>(() =>
-    (posts() ?? []).map((p) => mediaItem(p.uri)),
-  );
+  const postList = () => {
+    if (posts.error) throw posts.error;
+    return posts() ?? [];
+  };
+
+  const viewerItems = createMemo<ViewerItem[]>(() => postList().map((p) => mediaItem(p.uri)));
 
   return (
     <div class="flex h-full flex-col">
-      <div class="shrink-0 border-b border-border px-8 py-5">
-        <h1 class="text-2xl font-semibold tracking-tight">Posts</h1>
-        <Show when={posts()}>
-          <p class="mt-1 text-sm text-muted">{posts()!.length} recovered</p>
-        </Show>
+      <div class="shrink-0 px-8 pt-5">
+        <PageHeader
+          title="Posts"
+          description={
+            posts.loading
+              ? 'Loading recovered media…'
+              : `${postList().length.toLocaleString()} recovered media files`
+          }
+        />
       </div>
 
       <div class="min-h-0 flex-1 overflow-y-auto px-8 py-5">
-        <div class="mb-6 rounded-xl border border-dashed border-border bg-surface p-4 text-sm text-muted">
+        <Surface as="div" class="mb-6 border-dashed !p-4 text-sm leading-6 text-muted">
           Meta's 2026-05 “Download Your Information” export omits the posts index, so these media
           files were recovered directly from the archive — without captions, timestamps, or
           engagement counts.
-        </div>
+        </Surface>
 
         <Show when={!posts.loading} fallback={<SkeletonGrid />}>
           <Show
-            when={(posts()?.length ?? 0) > 0}
+            when={postList().length > 0}
             fallback={
               <EmptyState
                 icon="posts"
@@ -163,7 +183,7 @@ function InstagramPosts(): JSX.Element {
             }
           >
             <div class="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
-              <For each={posts()}>
+              <For each={postList()}>
                 {(p, i) => (
                   <button
                     type="button"
@@ -179,9 +199,11 @@ function InstagramPosts(): JSX.Element {
                       </Show>
                     </div>
                     <div class="p-2">
-                      <p class="truncate font-mono text-xs text-muted">{p.mediaId}</p>
+                      <p class="text-xs font-medium text-ink">
+                        Recovered {isVideoUri(p.uri) ? 'video' : 'image'}
+                      </p>
                       <p class="text-xs text-muted">
-                        {p.ext?.toUpperCase()}
+                        {DATE_UNAVAILABLE}
                         <Show when={p.sizeBytes != null}> · {fmtSize(p.sizeBytes)}</Show>
                       </p>
                     </div>
@@ -198,5 +220,9 @@ function InstagramPosts(): JSX.Element {
 
 export default function Posts(): JSX.Element {
   const app = useApp();
-  return <Show when={app.activeService() === "facebook"} fallback={<InstagramPosts />}><FacebookPosts /></Show>;
+  return (
+    <Show when={app.activeService() === 'facebook'} fallback={<InstagramPosts />}>
+      <FacebookPosts />
+    </Show>
+  );
 }

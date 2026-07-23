@@ -1,21 +1,18 @@
-import { createResource, For, Show, type JSX } from "solid-js";
-import { ArchiveImage, FramedVideoThumb, isVideoUri } from "../components/ArchiveMedia";
-import { EmptyState } from "../components/EmptyState";
-import { SkeletonGrid } from "../components/Skeleton";
-import { fetchAlbums, type FacebookAlbum } from "../lib/queries";
-import { vmediaUrl } from "../lib/media";
-import { useApp } from "../state/app";
-import { viewer, type ViewerItem } from "../state/viewer";
-
-function fmtDate(msOrSec: number | null): string {
-  if (!msOrSec) return "";
-  const ms = msOrSec < 10_000_000_000 ? msOrSec * 1000 : msOrSec;
-  return new Date(ms).toLocaleString();
-}
+import { createResource, For, Show, type JSX } from 'solid-js';
+import { ArchiveImage, FramedVideoThumb, isVideoUri } from '../components/ArchiveMedia';
+import { EmptyState } from '../components/EmptyState';
+import { SkeletonGrid } from '../components/Skeleton';
+import { fetchAlbums, type FacebookAlbum } from '../lib/queries';
+import { vmediaUrl } from '../lib/media';
+import { useApp } from '../state/app';
+import { viewer, type ViewerItem } from '../state/viewer';
+import PageHeader from '../components/PageHeader';
+import Surface from '../components/Surface';
+import { formatArchiveTimestamp } from '../lib/presentation';
 
 function viewerItems(album: FacebookAlbum): ViewerItem[] {
   return album.photos.map((p) => ({
-    kind: isVideoUri(p.uri) ? "video" : "image",
+    kind: isVideoUri(p.uri) ? 'video' : 'image',
     src: vmediaUrl(p.uri),
     caption: p.description ?? p.title ?? album.name,
     timestampMs: p.createdAt ?? undefined,
@@ -28,14 +25,22 @@ export default function Albums(): JSX.Element {
     () => app.activeArchiveId(),
     (id) => fetchAlbums(id ?? undefined),
   );
+  const albumList = () => {
+    if (albums.error) throw albums.error;
+    return albums() ?? [];
+  };
 
   return (
     <div class="flex h-full flex-col">
-      <div class="shrink-0 border-b border-border px-8 py-5">
-        <h1 class="text-2xl font-semibold tracking-tight">Albums</h1>
-        <Show when={albums()}>
-          <p class="mt-1 text-sm text-muted">{albums()!.length} photo albums</p>
-        </Show>
+      <div class="shrink-0 px-8 pt-5">
+        <PageHeader
+          title="Albums"
+          description={
+            albums.loading
+              ? 'Loading photo albums…'
+              : `${albumList().length.toLocaleString()} photo albums`
+          }
+        />
       </div>
 
       <div class="min-h-0 flex-1 overflow-y-auto px-8 py-5">
@@ -50,7 +55,7 @@ export default function Albums(): JSX.Element {
           }
         >
           <Show
-            when={(albums()?.length ?? 0) > 0}
+            when={albumList().length > 0}
             fallback={
               <EmptyState
                 icon="albums"
@@ -60,12 +65,12 @@ export default function Albums(): JSX.Element {
             }
           >
             <div class="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-              <For each={albums()}>
+              <For each={albumList()}>
                 {(album) => {
                   const items = () => viewerItems(album);
                   const cover = () => album.coverPhotoUri ?? album.photos[0]?.uri;
                   return (
-                    <article class="overflow-hidden rounded-xl border border-border bg-surface">
+                    <Surface as="div" class="overflow-hidden !p-0">
                       <button
                         type="button"
                         disabled={items().length === 0}
@@ -74,13 +79,19 @@ export default function Albums(): JSX.Element {
                       >
                         <Show
                           when={cover()}
-                          fallback={<div class="flex aspect-video items-center justify-center text-sm text-muted">No photos</div>}
+                          fallback={
+                            <div class="flex aspect-video items-center justify-center text-sm text-muted">
+                              No photos
+                            </div>
+                          }
                         >
                           {(uri) => (
                             <div class="relative aspect-video">
                               <Show
                                 when={isVideoUri(uri())}
-                                fallback={<ArchiveImage uri={uri()} class="h-full w-full object-cover" />}
+                                fallback={
+                                  <ArchiveImage uri={uri()} class="h-full w-full object-cover" />
+                                }
                               >
                                 <FramedVideoThumb src={vmediaUrl(uri())} class="absolute inset-0" />
                               </Show>
@@ -89,13 +100,18 @@ export default function Albums(): JSX.Element {
                         </Show>
                       </button>
                       <div class="p-4">
-                        <h2 class="font-medium text-ink">{album.name || "Untitled album"}</h2>
+                        <h2 class="font-medium text-ink">{album.name || 'Untitled album'}</h2>
                         <p class="mt-1 text-xs text-muted">
                           {album.photoCount.toLocaleString()} photos
-                          <Show when={album.lastModified}> · {fmtDate(album.lastModified)}</Show>
+                          <Show when={album.lastModified}>
+                            {' '}
+                            · {formatArchiveTimestamp(album.lastModified)}
+                          </Show>
                         </p>
                         <Show when={album.description}>
-                          <p class="mt-3 line-clamp-3 text-sm leading-6 text-muted">{album.description}</p>
+                          <p class="mt-3 line-clamp-3 text-sm leading-6 text-muted">
+                            {album.description}
+                          </p>
                         </Show>
                         <Show when={album.photos.length > 1}>
                           <div class="mt-3 grid grid-cols-5 gap-1">
@@ -108,9 +124,17 @@ export default function Albums(): JSX.Element {
                                 >
                                   <Show
                                     when={isVideoUri(photo.uri)}
-                                    fallback={<ArchiveImage uri={photo.uri} class="h-full w-full object-cover" />}
+                                    fallback={
+                                      <ArchiveImage
+                                        uri={photo.uri}
+                                        class="h-full w-full object-cover"
+                                      />
+                                    }
                                   >
-                                    <FramedVideoThumb src={vmediaUrl(photo.uri)} class="absolute inset-0" />
+                                    <FramedVideoThumb
+                                      src={vmediaUrl(photo.uri)}
+                                      class="absolute inset-0"
+                                    />
                                   </Show>
                                 </button>
                               )}
@@ -118,7 +142,7 @@ export default function Albums(): JSX.Element {
                           </div>
                         </Show>
                       </div>
-                    </article>
+                    </Surface>
                   );
                 }}
               </For>

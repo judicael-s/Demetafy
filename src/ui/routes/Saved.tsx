@@ -8,13 +8,13 @@ import {
   onMount,
   Show,
   type JSX,
-} from "solid-js";
-import { A, useParams } from "@solidjs/router";
-import { createVirtualizer } from "@tanstack/solid-virtual";
-import { fetchCollections, fetchSavedItems, type SavedItem } from "../lib/queries";
-import { downloadQueue } from "../lib/downloads";
-import { itemKey } from "../lib/download-queue";
-import { useApp } from "../state/app";
+} from 'solid-js';
+import { A, useParams } from '@solidjs/router';
+import { createVirtualizer } from '@tanstack/solid-virtual';
+import { fetchCollections, fetchSavedItems, type SavedItem } from '../lib/queries';
+import { downloadQueue } from '../lib/downloads';
+import { itemKey } from '../lib/download-queue';
+import { useApp } from '../state/app';
 import {
   effLocalPathFor,
   effStatusFor,
@@ -23,13 +23,16 @@ import {
   sanitizeSlug,
   statusLabel,
   statusTone,
-} from "../lib/download-ui";
-import { dmediaUrl } from "../lib/media";
-import { PhoneFrame, createOrientation } from "../components/PhoneFrame";
-import { EmptyState } from "../components/EmptyState";
-import { SkeletonGrid } from "../components/Skeleton";
-import { linkType, shortCode } from "../lib/links";
-import { viewer, type ViewerItem } from "../state/viewer";
+} from '../lib/download-ui';
+import { dmediaUrl } from '../lib/media';
+import { PhoneFrame, createOrientation } from '../components/PhoneFrame';
+import { EmptyState } from '../components/EmptyState';
+import { SkeletonGrid } from '../components/Skeleton';
+import { linkType, shortCode } from '../lib/links';
+import { viewer, type ViewerItem } from '../state/viewer';
+import Button from '../components/Button';
+import PageHeader from '../components/PageHeader';
+import { formatArchiveTimestamp } from '../lib/presentation';
 
 // Image-first portrait tiles (4:5), Instagram-saved-grid style. Tile height is
 // derived from the measured column width so the virtualizer row size and the card
@@ -40,8 +43,8 @@ const TILE_RATIO = 5 / 4; // height / width (portrait)
 
 function SavedCard(props: { item: SavedItem; onOpen: (i: SavedItem) => void }): JSX.Element {
   const { orientation, measure } = createOrientation();
-  const key = () => itemKey("saved", props.item.id);
-  const date = () => new Date(props.item.savedAt).toLocaleDateString();
+  const key = () => itemKey('saved', props.item.id);
+  const date = () => formatArchiveTimestamp(props.item.savedAt);
   const status = () => effStatusFor(key(), props.item.downloadStatus, downloadQueue.state);
   const thumb = () => effThumbPathFor(key(), props.item.thumbPath, downloadQueue.state);
   const local = () => effLocalPathFor(key(), props.item.localPath, downloadQueue.state);
@@ -51,10 +54,10 @@ function SavedCard(props: { item: SavedItem; onOpen: (i: SavedItem) => void }): 
   const posterVideo = () => (!thumb() && isDownloaded(status()) ? local() : null);
   const hasPoster = () => !!thumb() || !!posterVideo();
   const isVideo = () =>
-    !!posterVideo() || linkType(props.item.url) === "Reel" || linkType(props.item.url) === "IGTV";
+    !!posterVideo() || linkType(props.item.url) === 'Reel' || linkType(props.item.url) === 'IGTV';
   const chip = () => {
     const s = status();
-    if (s === "running") return `${Math.round(downloadQueue.state.items[key()]?.progress ?? 0)}%`;
+    if (s === 'running') return `${Math.round(downloadQueue.state.items[key()]?.progress ?? 0)}%`;
     return statusLabel(s);
   };
   return (
@@ -64,7 +67,9 @@ function SavedCard(props: { item: SavedItem; onOpen: (i: SavedItem) => void }): 
     >
       {/* Poster fills the tile: a fetched thumbnail image, else the downloaded video's first frame. */}
       <Show when={thumb()}>
-        {(t) => <img src={dmediaUrl(t())} alt="" class="absolute inset-0 h-full w-full object-cover" />}
+        {(t) => (
+          <img src={dmediaUrl(t())} alt="" class="absolute inset-0 h-full w-full object-cover" />
+        )}
       </Show>
       <Show when={posterVideo()}>
         {(v) => (
@@ -90,17 +95,22 @@ function SavedCard(props: { item: SavedItem; onOpen: (i: SavedItem) => void }): 
       <div class="relative z-10 flex items-center gap-2 p-2.5 text-[11px]">
         <span
           class="rounded-md px-1.5 py-0.5 font-semibold uppercase tracking-wide"
-          classList={{ "bg-black/55 text-white backdrop-blur-sm": hasPoster(), "bg-surface-2 text-ink": !hasPoster() }}
+          classList={{
+            'bg-black/55 text-white backdrop-blur-sm': hasPoster(),
+            'bg-surface-2 text-ink': !hasPoster(),
+          }}
         >
           {linkType(props.item.url)}
         </span>
-        <span classList={{ "text-white/85": hasPoster(), "text-muted": !hasPoster() }}>{date()}</span>
-        <Show when={status() !== "none"}>
+        <span classList={{ 'text-white/85': hasPoster(), 'text-muted': !hasPoster() }}>
+          {date()}
+        </span>
+        <Show when={status() !== 'none'}>
           <span
             class="ml-auto rounded-md px-1.5 py-0.5 font-semibold"
             classList={{
-              "bg-black/55 text-white backdrop-blur-sm": hasPoster(),
-              "bg-surface-2": !hasPoster(),
+              'bg-black/55 text-white backdrop-blur-sm': hasPoster(),
+              'bg-surface-2': !hasPoster(),
               [statusTone(status())]: !hasPoster(),
             }}
           >
@@ -178,7 +188,14 @@ export default function Saved(): JSX.Element {
     return Math.max(0, Math.round(colWidth * TILE_RATIO));
   });
 
-  const list = () => items() ?? [];
+  const list = () => {
+    if (items.error) throw items.error;
+    return items() ?? [];
+  };
+  const collectionList = () => {
+    if (collections.error) throw collections.error;
+    return collections() ?? [];
+  };
   const rowCount = createMemo(() => Math.ceil(list().length / cols()));
 
   const virtualizer = createVirtualizer({
@@ -206,14 +223,16 @@ export default function Saved(): JSX.Element {
   // the "Download to view" CTA + dwell auto-enqueue) from the live queue/DB.
   const viewerItems = createMemo<ViewerItem[]>(() =>
     list().map((it) => ({
-      kind: "video",
+      kind: 'video',
       caption: it.caption || undefined,
       timestampMs: it.savedAt,
       openExternalUrl: it.url,
       download: {
-        key: itemKey("saved", it.id),
+        key: itemKey('saved', it.id),
         enqueue: () =>
-          downloadQueue.enqueue([{ source: "saved", refId: it.id, url: it.url, slug: slugFor(it) }]),
+          downloadQueue.enqueue([
+            { source: 'saved', refId: it.id, url: it.url, slug: slugFor(it) },
+          ]),
         dbStatus: it.downloadStatus,
         dbLocalPath: it.localPath,
         dbThumbPath: it.thumbPath,
@@ -224,23 +243,25 @@ export default function Saved(): JSX.Element {
 
   const downloadAll = () => {
     const slug = sanitizeSlug(collection());
-    downloadQueue.enqueue(list().map((it) => ({ source: "saved", refId: it.id, url: it.url, slug })));
+    downloadQueue.enqueue(
+      list().map((it) => ({ source: 'saved', refId: it.id, url: it.url, slug })),
+    );
   };
 
   return (
     <div class="flex h-full flex-col">
       <div class="shrink-0 border-b border-border px-8 py-5">
-        <div class="flex items-center justify-between gap-4">
-          <h1 class="text-2xl font-semibold tracking-tight">Saved</h1>
-          <Show when={collection() && list().length > 0}>
-            <button
-              class="shrink-0 rounded-lg border border-border px-4 py-2 text-sm hover:border-accent"
-              onClick={downloadAll}
-            >
-              Download all ({list().length})
-            </button>
-          </Show>
-        </div>
+        <PageHeader
+          title="Saved"
+          description="Posts and reels preserved from your saved collections."
+          actions={
+            <Show when={collection() && list().length > 0}>
+              <Button variant="secondary" onClick={downloadAll}>
+                Download all ({list().length})
+              </Button>
+            </Show>
+          }
+        />
         <div class="mt-4 flex flex-wrap gap-2">
           <A
             href="/saved"
@@ -250,7 +271,7 @@ export default function Saved(): JSX.Element {
           >
             All
           </A>
-          <For each={collections()}>
+          <For each={collectionList()}>
             {(c) => (
               <A
                 href={`/saved/c/${encodeURIComponent(c.name)}`}
@@ -278,22 +299,28 @@ export default function Saved(): JSX.Element {
             }
           >
             <p class="mb-4 text-sm text-muted">{list().length.toLocaleString()} items</p>
-            <div style={{ height: `${virtualizer.getTotalSize()}px`, position: "relative", width: "100%" }}>
+            <div
+              style={{
+                height: `${virtualizer.getTotalSize()}px`,
+                position: 'relative',
+                width: '100%',
+              }}
+            >
               <For each={virtualizer.getVirtualItems()}>
                 {(vrow) => (
                   <div
                     style={{
-                      position: "absolute",
+                      position: 'absolute',
                       top: 0,
                       left: 0,
-                      width: "100%",
+                      width: '100%',
                       transform: `translateY(${vrow.start}px)`,
                       height: `${tileHeight()}px`,
                     }}
                   >
                     <div
                       class="grid h-full gap-3"
-                      style={{ "grid-template-columns": `repeat(${cols()}, minmax(0, 1fr))` }}
+                      style={{ 'grid-template-columns': `repeat(${cols()}, minmax(0, 1fr))` }}
                     >
                       <For each={rowItems(vrow.index)}>
                         {(item) => <SavedCard item={item} onOpen={openAt} />}

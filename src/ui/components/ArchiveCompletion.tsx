@@ -1,7 +1,18 @@
-import { createEffect, createResource, createSignal, on, onCleanup, Show, type JSX } from "solid-js";
-import { fetchDownloadStats } from "../lib/queries";
-import { downloadQueue, fillArchive } from "../lib/downloads";
-import { queueCounts } from "../lib/download-queue";
+import {
+  createEffect,
+  createResource,
+  createSignal,
+  on,
+  onCleanup,
+  Show,
+  type JSX,
+} from 'solid-js';
+import { fetchDownloadStats } from '../lib/queries';
+import { downloadQueue, fillArchive } from '../lib/downloads';
+import { queueCounts } from '../lib/download-queue';
+import Button from './Button';
+import { SkeletonList } from './Skeleton';
+import Surface from './Surface';
 
 /**
  * "Completing your archive" card: an honest 3-slice progress bar (downloaded /
@@ -23,7 +34,11 @@ export function ArchiveCompletion(props: { archiveId?: number; service?: string 
     (src) => fetchDownloadStats(src.archiveId),
   );
   const [busy, setBusy] = createSignal(false);
-  const noun = (): string => (props.service === "facebook" ? "shared videos" : "posts");
+  const resolvedStats = () => {
+    if (stats.error) throw stats.error;
+    return stats();
+  };
+  const noun = (): string => (props.service === 'facebook' ? 'shared videos' : 'posts');
 
   let timer: ReturnType<typeof setTimeout> | undefined;
   createEffect(
@@ -59,29 +74,22 @@ export function ArchiveCompletion(props: { archiveId?: number; service?: string 
 
   const buttonLabel = (remaining: number): string => {
     if (active() > 0) return `Downloading… (${active().toLocaleString()} left)`;
-    if (remaining === 0) return "All caught up";
-    const what = props.service === "facebook" ? "shared videos" : "my posts";
+    if (remaining === 0) return 'All caught up';
+    const what = props.service === 'facebook' ? 'shared videos' : 'my posts';
     return `Download all ${what} (${remaining.toLocaleString()})`;
   };
 
   return (
-    <Show
-      when={stats()}
-      fallback={
-        <div class="rounded-xl border border-border bg-surface p-5 text-sm text-muted">
-          Checking your archive…
-        </div>
-      }
-    >
+    <Show when={resolvedStats()} fallback={<SkeletonList rows={1} rowClass="h-40" />}>
       {(s) => (
-        <div class="rounded-xl border border-border bg-surface p-5">
+        <Surface as="div" class="!p-5">
           <Show
             when={s().total > 0}
             fallback={
               <p class="text-sm text-muted">
-                {props.service === "facebook"
-                  ? "No downloadable videos found in your conversations — your post and album media is already saved offline."
-                  : "No downloadable posts found — your conversation, story, and profile media is already saved offline."}
+                {props.service === 'facebook'
+                  ? 'No downloadable videos found in your conversations — your post and album media is already saved offline.'
+                  : 'No downloadable posts found — your conversation, story, and profile media is already saved offline.'}
               </p>
             }
           >
@@ -89,10 +97,10 @@ export function ArchiveCompletion(props: { archiveId?: number; service?: string 
               <div class="min-w-0">
                 <h2 class="text-sm font-medium text-ink">Completing your archive</h2>
                 <p class="mt-0.5 text-xs text-muted">
-                  {s().downloaded.toLocaleString()} of {s().reachable.toLocaleString()} reachable{" "}
+                  {s().downloaded.toLocaleString()} of {s().reachable.toLocaleString()} reachable{' '}
                   {noun()} downloaded
                   <Show when={s().unavailable > 0}>
-                    {" · "}
+                    {' · '}
                     {s().unavailable.toLocaleString()} unavailable
                   </Show>
                 </p>
@@ -112,7 +120,10 @@ export function ArchiveCompletion(props: { archiveId?: number; service?: string 
                 class="bg-emerald-500"
                 style={{ width: `${(s().downloaded / s().total) * 100}%` }}
               />
-              <div class="bg-accent/40" style={{ width: `${(s().remaining / s().total) * 100}%` }} />
+              <div
+                class="bg-accent/40"
+                style={{ width: `${(s().remaining / s().total) * 100}%` }}
+              />
               <div
                 class="bg-border"
                 style={{ width: `${(s().unavailable / s().total) * 100}%` }}
@@ -121,24 +132,24 @@ export function ArchiveCompletion(props: { archiveId?: number; service?: string 
             </div>
 
             <div class="mt-4 flex flex-wrap items-center gap-3">
-              <button
-                class="rounded-lg btn-brand px-4 py-2 text-sm font-medium text-accent-ink transition-opacity hover:opacity-90 disabled:opacity-40"
+              <Button
+                variant="primary"
                 disabled={busy() || active() > 0 || s().remaining === 0}
                 onClick={() => void fill()}
               >
                 {buttonLabel(s().remaining)}
-              </button>
+              </Button>
               <Show when={s().remaining > 0 && active() === 0}>
                 <span class="text-xs text-muted">
-                  Runs in the background — keep browsing.{" "}
-                  {props.service === "facebook"
-                    ? "Some may be unavailable."
-                    : "~40% are typically unavailable."}
+                  Runs in the background — keep browsing.{' '}
+                  {props.service === 'facebook'
+                    ? 'Some may be unavailable.'
+                    : '~40% are typically unavailable.'}
                 </span>
               </Show>
             </div>
           </Show>
-        </div>
+        </Surface>
       )}
     </Show>
   );

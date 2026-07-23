@@ -7,42 +7,45 @@ import {
   onMount,
   Show,
   type JSX,
-} from "solid-js";
-import { useNavigate } from "@solidjs/router";
-import { createVirtualizer } from "@tanstack/solid-virtual";
-import { fetchThreads, type ThreadSummary } from "../lib/queries";
-import { Avatar } from "../components/Avatar";
-import { EmptyState } from "../components/EmptyState";
-import { SkeletonList } from "../components/Skeleton";
-import { useApp } from "../state/app";
+} from 'solid-js';
+import { useNavigate } from '@solidjs/router';
+import { createVirtualizer } from '@tanstack/solid-virtual';
+import { fetchThreads, type ThreadSummary } from '../lib/queries';
+import { Avatar } from '../components/Avatar';
+import { EmptyState } from '../components/EmptyState';
+import { SkeletonList } from '../components/Skeleton';
+import { useApp } from '../state/app';
+import Button from '../components/Button';
+import PageHeader from '../components/PageHeader';
+import { formatArchiveTimestamp } from '../lib/presentation';
 
 const ROW_HEIGHT = 76;
 
-type SortKey = "recency" | "count" | "alpha";
+type SortKey = 'recency' | 'count' | 'alpha';
 
 // Friendly labels + display order for thread categories. Instagram uses
 // inbox/message_requests/broadcast; Facebook adds archived/filtered/encrypted.
 // Chips are driven by which categories actually appear, so both services work
 // without a hardcoded per-service list.
 const SOURCE_LABELS: Record<string, string> = {
-  inbox: "Inbox",
-  message_requests: "Requests",
-  archived_threads: "Archived",
-  filtered_threads: "Filtered",
-  e2ee_cutover: "Encrypted",
-  broadcast: "Broadcast",
+  inbox: 'Inbox',
+  message_requests: 'Requests',
+  archived_threads: 'Archived',
+  filtered_threads: 'Filtered',
+  e2ee_cutover: 'Encrypted',
+  broadcast: 'Broadcast',
 };
 const SOURCE_ORDER = Object.keys(SOURCE_LABELS);
 const sourceLabel = (s: string): string => SOURCE_LABELS[s] ?? s;
 
 function displayTitle(t: ThreadSummary): string {
-  return t.title || t.participants.join(", ") || t.slug;
+  return t.title || t.participants.join(', ') || t.slug;
 }
 
 function ThreadRow(props: { thread: ThreadSummary; onOpen: (slug: string) => void }): JSX.Element {
   const t = props.thread;
   const title = displayTitle(t);
-  const date = () => (t.lastMessageAt ? new Date(t.lastMessageAt).toLocaleDateString() : "");
+  const date = () => formatArchiveTimestamp(t.lastMessageAt);
   const isGroup = t.participants.length > 2;
   return (
     <button
@@ -59,7 +62,7 @@ function ThreadRow(props: { thread: ThreadSummary; onOpen: (slug: string) => voi
             </span>
           </Show>
         </div>
-        <p class="truncate text-sm text-muted">{t.lastPreview || "Media"}</p>
+        <p class="truncate text-sm text-muted">{t.lastPreview || 'Media'}</p>
       </div>
       <div class="shrink-0 text-right">
         <div class="text-xs text-muted">{date()}</div>
@@ -78,12 +81,16 @@ export default function Dms(): JSX.Element {
     () => app.activeArchiveId(),
     (id) => fetchThreads(id ?? undefined),
   );
+  const allThreads = () => {
+    if (threads.error) throw threads.error;
+    return threads() ?? [];
+  };
   const [sourceSel, setSource] = createSignal<string | null>(null);
-  const [sort, setSort] = createSignal<SortKey>("recency");
+  const [sort, setSort] = createSignal<SortKey>('recency');
 
   const counts = createMemo(() => {
     const c = new Map<string, number>();
-    for (const t of threads() ?? []) c.set(t.source, (c.get(t.source) ?? 0) + 1);
+    for (const t of allThreads()) c.set(t.source, (c.get(t.source) ?? 0) + 1);
     return c;
   });
 
@@ -100,16 +107,16 @@ export default function Dms(): JSX.Element {
   const source = createMemo(() => {
     const avail = availableSources();
     const sel = sourceSel();
-    return sel && avail.includes(sel) ? sel : (avail[0] ?? "inbox");
+    return sel && avail.includes(sel) ? sel : (avail[0] ?? 'inbox');
   });
 
   const view = createMemo(() => {
-    const rows = (threads() ?? []).filter((t) => t.source === source());
+    const rows = allThreads().filter((t) => t.source === source());
     const s = sort();
     const sorted = [...rows];
-    if (s === "recency") {
+    if (s === 'recency') {
       sorted.sort((a, b) => (b.lastMessageAt ?? 0) - (a.lastMessageAt ?? 0));
-    } else if (s === "count") {
+    } else if (s === 'count') {
       sorted.sort((a, b) => b.messageCount - a.messageCount);
     } else {
       sorted.sort((a, b) => displayTitle(a).localeCompare(displayTitle(b)));
@@ -138,37 +145,38 @@ export default function Dms(): JSX.Element {
   return (
     <div class="flex h-full flex-col">
       <div class="shrink-0 border-b border-border px-8 py-5">
-        <div class="flex items-center justify-between gap-4">
-          <h1 class="text-2xl font-semibold tracking-tight">Messages</h1>
-          <label class="flex items-center gap-2 text-sm text-muted">
-            Sort
-            <select
-              class="rounded-lg border border-border bg-surface px-2 py-1 text-sm text-ink"
-              value={sort()}
-              onChange={(e) => setSort(e.currentTarget.value as SortKey)}
-            >
-              <option value="recency">Recent</option>
-              <option value="count">Most messages</option>
-              <option value="alpha">Name</option>
-            </select>
-          </label>
-        </div>
+        <PageHeader
+          title="Messages"
+          description="Browse conversations preserved in this archive."
+          actions={
+            <label class="flex items-center gap-2 text-sm text-muted">
+              Sort
+              <select
+                class="min-h-10 rounded-md border border-border bg-surface px-3 py-2 text-sm text-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus"
+                value={sort()}
+                onChange={(e) => setSort(e.currentTarget.value as SortKey)}
+              >
+                <option value="recency">Recent</option>
+                <option value="count">Most messages</option>
+                <option value="alpha">Name</option>
+              </select>
+            </label>
+          }
+        />
         <div class="mt-4 flex flex-wrap gap-2">
           <For each={availableSources()}>
             {(s) => (
-              <button
-                class="rounded-full border border-border px-3 py-1 text-sm text-muted hover:text-ink"
-                classList={{
-                  "!border-accent !bg-accent !text-accent-ink": source() === s,
-                }}
+              <Button
+                variant={source() === s ? 'primary' : 'ghost'}
+                size="sm"
                 onClick={() => {
                   setSource(s);
                   scrollEl?.scrollTo({ top: 0 });
                 }}
               >
                 {sourceLabel(s)}
-                <span class="ml-1.5 text-xs opacity-70">{counts().get(s) ?? 0}</span>
-              </button>
+                <span class="text-xs opacity-70">{counts().get(s) ?? 0}</span>
+              </Button>
             )}
           </For>
         </div>
@@ -189,18 +197,18 @@ export default function Dms(): JSX.Element {
             <div
               style={{
                 height: `${virtualizer.getTotalSize()}px`,
-                position: "relative",
-                width: "100%",
+                position: 'relative',
+                width: '100%',
               }}
             >
               <For each={virtualizer.getVirtualItems()}>
                 {(vrow) => (
                   <div
                     style={{
-                      position: "absolute",
+                      position: 'absolute',
                       top: 0,
                       left: 0,
-                      width: "100%",
+                      width: '100%',
                       transform: `translateY(${vrow.start}px)`,
                       height: `${ROW_HEIGHT}px`,
                     }}

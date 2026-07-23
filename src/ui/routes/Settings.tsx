@@ -1,11 +1,14 @@
-import { createSignal, For, onMount, Show, type JSX } from "solid-js";
-import { confirm, open as openDialog } from "@tauri-apps/plugin-dialog";
-import { open as openExternal } from "@tauri-apps/plugin-shell";
-import { useApp } from "../state/app";
-import { ImportPanel } from "../components/ImportPanel";
-import { deleteArchive, type ArchiveAccount } from "../lib/queries";
-import { downloadDir } from "../lib/db";
-import { checkYtdlp, type YtdlpStatus } from "../lib/downloads";
+import { createSignal, For, onMount, Show, type JSX } from 'solid-js';
+import { confirm, open as openDialog } from '@tauri-apps/plugin-dialog';
+import { open as openExternal } from '@tauri-apps/plugin-shell';
+import { useApp } from '../state/app';
+import { ImportPanel } from '../components/ImportPanel';
+import Button from '../components/Button';
+import PageHeader from '../components/PageHeader';
+import Surface from '../components/Surface';
+import { deleteArchive, type ArchiveAccount } from '../lib/queries';
+import { downloadDir } from '../lib/db';
+import { checkYtdlp, type YtdlpStatus } from '../lib/downloads';
 import {
   getCookiesPath,
   getFetchAvatarsEnabled,
@@ -13,260 +16,255 @@ import {
   setCookiesPath,
   setFetchAvatarsEnabled,
   setParallelism,
-} from "../lib/settings";
-import { persistTheme, resolveTheme, type Theme } from "../lib/theme";
+} from '../lib/settings';
+import { formatArchiveTimestamp } from '../lib/presentation';
+import { persistTheme, resolveTheme, type Theme } from '../lib/theme';
+
+const rowClass = 'flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between sm:gap-6';
 
 export default function Settings(): JSX.Element {
   const app = useApp();
-  const [theme, setTheme] = createSignal<Theme>("dark");
-
+  const [theme, setTheme] = createSignal<Theme>('dark');
   const [parallel, setParallel] = createSignal(1);
-  const [cookies, setCookies] = createSignal<string | undefined>(undefined);
-  const [downloadsPath, setDownloadsPath] = createSignal("");
-  const [ytdlp, setYtdlp] = createSignal<YtdlpStatus | undefined>(undefined);
+  const [cookies, setCookies] = createSignal<string | undefined>();
+  const [downloadsPath, setDownloadsPath] = createSignal('');
+  const [ytdlp, setYtdlp] = createSignal<YtdlpStatus>();
   const [fetchAvatars, setFetchAvatars] = createSignal(false);
 
   onMount(async () => {
     setTheme(resolveTheme());
-
     setParallel(getParallelism());
     setCookies(getCookiesPath());
     setFetchAvatars(getFetchAvatarsEnabled());
     try {
       setDownloadsPath(await downloadDir());
     } catch {
-      /* leave blank if the command isn't available */
+      // Storage remains unavailable until the native command is reachable.
     }
     setYtdlp(await checkYtdlp());
   });
 
-  const toggle = () => {
-    const next: Theme = theme() === "dark" ? "light" : "dark";
+  const toggleTheme = () => {
+    const next: Theme = theme() === 'dark' ? 'light' : 'dark';
     setTheme(next);
     persistTheme(next);
   };
-
   const changeParallel = (n: number) => {
     setParallelism(n);
     setParallel(getParallelism());
   };
-
   const pickCookies = async () => {
     const selected = await openDialog({
       multiple: false,
       directory: false,
-      filters: [{ name: "Cookies file", extensions: ["txt"] }],
+      filters: [{ name: 'Cookies file', extensions: ['txt'] }],
     });
-    if (typeof selected === "string") {
+    if (typeof selected === 'string') {
       setCookiesPath(selected);
       setCookies(selected);
     }
   };
-
   const clearCookies = () => {
     setCookiesPath(null);
     setCookies(undefined);
   };
-
   const toggleFetchAvatars = () => {
     const next = !fetchAvatars();
     setFetchAvatarsEnabled(next);
     setFetchAvatars(next);
   };
-
-  const accountLabel = (a: ArchiveAccount): string =>
-    a.username ? `@${a.username}` : (a.displayName ?? a.service);
-
-  const removeAccount = async (a: ArchiveAccount): Promise<void> => {
-    const label = accountLabel(a);
+  const accountLabel = (account: ArchiveAccount): string =>
+    account.username ? `@${account.username}` : (account.displayName ?? account.service);
+  const removeAccount = async (account: ArchiveAccount): Promise<void> => {
+    const label = accountLabel(account);
     const ok = await confirm(
-      `Remove ${label}? This deletes its imported data from Demetafy's index. Your original archive files on disk are not touched.`,
-      { title: "Remove account", kind: "warning" },
+      `Remove ${label}? This deletes its imported data from Demetafy's index. Your original archive files are not touched.`,
+      { title: 'Remove account', kind: 'warning' },
     );
     if (!ok) return;
     try {
-      await deleteArchive(a.id);
+      await deleteArchive(account.id);
       await app.refresh();
-      app.pushToast("success", `Removed ${label}.`);
-    } catch (e) {
-      app.pushToast("error", `Could not remove ${label}: ${String(e)}`);
+      app.pushToast('success', `Removed ${label}.`);
+    } catch {
+      app.pushToast('error', `Could not remove ${label}. Try again.`);
     }
   };
 
   return (
-    <div class="mx-auto max-w-3xl px-8 py-10">
-      <h1 class="text-2xl font-semibold tracking-tight">Settings</h1>
+    <div class="mx-auto max-w-3xl px-4 py-6 sm:px-8 sm:py-10">
+      <PageHeader
+        title="Settings"
+        description="Manage archives, appearance, playback, downloads, and local storage."
+      />
 
-      <section class="mt-8 rounded-xl border border-border bg-surface p-5">
-        <h2 class="text-sm font-medium text-ink">Appearance</h2>
-        <div class="mt-3 flex items-center justify-between">
-          <span class="text-sm text-muted">Theme</span>
-          <button
-            class="rounded-lg border border-border px-4 py-2 text-sm capitalize hover:bg-surface-2"
-            onClick={toggle}
+      <div class="mt-8 space-y-6">
+        <Surface title="Account & archives">
+          <p class="text-sm leading-6 text-muted">
+            Each imported export stays separate. Switch accounts from the sidebar or add another
+            archive below.
+          </p>
+          <Show
+            when={app.archives().length > 0}
+            fallback={<p class="mt-4 text-sm text-muted">No archive imported yet.</p>}
           >
-            {theme()}
-          </button>
-        </div>
-      </section>
-
-      <section class="mt-6 rounded-xl border border-border bg-surface p-5">
-        <h2 class="text-sm font-medium text-ink">Downloads</h2>
-        <p class="mt-1 text-xs text-muted">
-          Saved videos are fetched with the bundled yt-dlp and stored on your device.
-        </p>
-
-        <div class="mt-4 flex items-center justify-between gap-4">
-          <div>
-            <span class="text-sm text-ink">Parallel downloads</span>
-            <p class="text-xs text-muted">Instagram rate-limits above one stream — 1 is safest.</p>
-          </div>
-          <select
-            value={parallel()}
-            onChange={(e) => changeParallel(Number(e.currentTarget.value))}
-            class="rounded-lg border border-border bg-bg px-3 py-2 text-sm text-ink outline-none focus:border-accent"
-          >
-            <option value="1">1 (safest)</option>
-            <option value="2">2</option>
-            <option value="3">3</option>
-          </select>
-        </div>
-
-        <div class="mt-4 flex items-center justify-between gap-4">
-          <div class="min-w-0">
-            <span class="text-sm text-ink">Cookies file</span>
-            <p class="truncate text-xs text-muted">
-              {cookies() ? cookies() : "Optional — needed for login-walled posts."}
-            </p>
-          </div>
-          <div class="flex shrink-0 gap-2">
-            <Show when={cookies()}>
-              <button
-                class="rounded-lg border border-border px-3 py-2 text-sm text-muted hover:text-ink"
-                onClick={clearCookies}
-              >
-                Clear
-              </button>
-            </Show>
-            <button
-              class="rounded-lg border border-border px-3 py-2 text-sm hover:bg-surface-2"
-              onClick={() => void pickCookies()}
-            >
-              Choose…
-            </button>
-          </div>
-        </div>
-
-        <div class="mt-4 flex items-center justify-between gap-4">
-          <div class="min-w-0">
-            <span class="text-sm text-ink">Downloads folder</span>
-            <p class="truncate font-mono text-xs text-muted">{downloadsPath() || "—"}</p>
-          </div>
-          <button
-            class="shrink-0 rounded-lg border border-border px-3 py-2 text-sm hover:bg-surface-2 disabled:opacity-40"
-            disabled={!downloadsPath()}
-            onClick={() => void openExternal(downloadsPath()).catch(() => undefined)}
-          >
-            Open folder
-          </button>
-        </div>
-
-        <div class="mt-4 flex items-center justify-between gap-4">
-          <span class="text-sm text-ink">yt-dlp</span>
-          <span class="text-xs text-muted">
-            {ytdlp() === undefined
-              ? "Checking…"
-              : ytdlp()!.version
-                ? `v${ytdlp()!.version}`
-                : "Not found"}
-          </span>
-        </div>
-        <Show when={ytdlp()?.stale}>
-          <div class="mt-3 rounded-lg border border-amber-500/50 bg-amber-500/10 px-3 py-2 text-xs text-ink">
-            <strong class="font-medium">Downloader may be out of date.</strong> The bundled yt-dlp
-            (v{ytdlp()!.version}) is older than the version this build expects (v{ytdlp()!.pinned}).
-            Saved-video downloads may fail until it's updated.
-          </div>
-        </Show>
-      </section>
-
-      <section class="mt-6 rounded-xl border border-border bg-surface p-5">
-        <h2 class="text-sm font-medium text-ink">Friends' photos (Instagram)</h2>
-        <div class="mt-3 flex items-center justify-between gap-4">
-          <div class="min-w-0">
-            <span class="text-sm text-ink">Fetch Instagram profile pictures</span>
-            <p class="mt-0.5 text-xs text-muted">
-              Demetafy's only network feature. When on, the Connections page can download your
-              contacts' current Instagram photos to this device, using your saved cookies file —
-              off by default, and nothing else ever leaves your machine. Facebook isn't supported
-              (its export has no handle to look up).
-            </p>
-          </div>
-          <button
-            class="shrink-0 rounded-lg border px-4 py-2 text-sm"
-            classList={{
-              "border-accent bg-accent text-accent-ink": fetchAvatars(),
-              "border-border hover:bg-surface-2": !fetchAvatars(),
-            }}
-            onClick={toggleFetchAvatars}
-          >
-            {fetchAvatars() ? "On" : "Off"}
-          </button>
-        </div>
-      </section>
-
-      <section class="mt-6 rounded-xl border border-border bg-surface p-5">
-        <h2 class="text-sm font-medium text-ink">Accounts</h2>
-        <p class="mt-1 text-xs text-muted">
-          Each imported archive is a separate account. Switch between them from the sidebar; import
-          as many Instagram or Facebook archives as you like.
-        </p>
-        <Show
-          when={app.archives().length > 0}
-          fallback={<p class="mt-3 text-xs text-muted">No archive imported yet.</p>}
-        >
-          <ul class="mt-3 flex flex-col gap-2">
-            <For each={app.archives()}>
-              {(acc) => (
-                <li class="flex items-center justify-between gap-3 rounded-lg border border-border bg-bg px-3 py-2">
-                  <div class="min-w-0">
-                    <p class="flex items-center gap-2 text-sm text-ink">
-                      <span class="truncate font-medium">{accountLabel(acc)}</span>
-                      <span class="shrink-0 text-[10px] font-medium uppercase tracking-wide text-muted">
-                        {acc.service}
-                      </span>
-                      <Show when={app.activeArchiveId() === acc.id}>
-                        <span class="shrink-0 rounded bg-accent/20 px-1.5 py-0.5 text-[10px] font-medium text-accent">
-                          Active
+            <ul class="mt-4 space-y-2">
+              <For each={app.archives()}>
+                {(account) => (
+                  <li class="flex flex-col gap-3 rounded-lg border border-border bg-bg p-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div class="min-w-0">
+                      <p class="flex flex-wrap items-center gap-2 text-sm text-ink">
+                        <span class="truncate font-medium">{accountLabel(account)}</span>
+                        <span class="text-xs uppercase tracking-[0.08em] text-muted">
+                          {account.service}
                         </span>
-                      </Show>
-                    </p>
-                    <p class="truncate font-mono text-xs text-muted" title={acc.sourcePath}>
-                      {acc.sourcePath}
-                    </p>
-                    <p class="mt-0.5 text-xs text-muted">
-                      Imported {new Date(acc.ingestedAt).toLocaleString()}
-                    </p>
-                  </div>
-                  <button
-                    class="shrink-0 rounded-lg border border-border px-3 py-2 text-sm text-muted transition-colors hover:border-red-500/50 hover:text-red-500"
-                    onClick={() => void removeAccount(acc)}
-                  >
-                    Remove
-                  </button>
-                </li>
-              )}
-            </For>
-          </ul>
-        </Show>
-        <p class="mt-4 text-xs text-muted">
-          Re-importing replaces the data for an archive with the same path; a new export is added as
-          another account.
-        </p>
-        <div class="mt-3">
-          <ImportPanel compact />
-        </div>
-      </section>
+                        <Show when={app.activeArchiveId() === account.id}>
+                          <span class="text-xs font-medium text-accent">Active account</span>
+                        </Show>
+                      </p>
+                      <p class="mt-1 text-xs text-muted">
+                        Imported {formatArchiveTimestamp(account.ingestedAt)} · source path hidden
+                        for privacy
+                      </p>
+                    </div>
+                    <Button variant="danger" size="sm" onClick={() => void removeAccount(account)}>
+                      Remove
+                    </Button>
+                  </li>
+                )}
+              </For>
+            </ul>
+          </Show>
+          <p class="mt-4 text-xs leading-5 text-muted">
+            Re-importing the same archive refreshes its index. Original export files remain
+            untouched.
+          </p>
+          <div class="mt-4">
+            <ImportPanel compact />
+          </div>
+        </Surface>
+
+        <Surface title="Appearance">
+          <div class={rowClass}>
+            <div>
+              <p class="text-sm font-medium text-ink">Theme</p>
+              <p class="mt-1 text-xs leading-5 text-muted">
+                Use the calm light or dark archive palette.
+              </p>
+            </div>
+            <Button variant="secondary" class="capitalize" onClick={toggleTheme}>
+              {theme()}
+            </Button>
+          </div>
+        </Surface>
+
+        <Surface title="Playback">
+          <p class="text-sm leading-6 text-muted">
+            Playback controls stay with the media you open. Reduced-motion preferences are
+            respected, and you can pause or move manually at any time.
+          </p>
+        </Surface>
+
+        <Surface title="Downloads & cookies">
+          <p class="text-sm leading-6 text-muted">
+            Saved posts and shared videos are fetched only when you start a download. Instagram
+            avatar fetching is a separate opt-in below.
+          </p>
+          <div class={`mt-5 ${rowClass}`}>
+            <div>
+              <p class="text-sm font-medium text-ink">Parallel downloads</p>
+              <p class="mt-1 text-xs text-muted">
+                One stream is safest when Instagram rate-limits requests.
+              </p>
+            </div>
+            <select
+              value={parallel()}
+              onChange={(event) => changeParallel(Number(event.currentTarget.value))}
+              class="min-h-10 rounded-md border border-border bg-bg px-3 py-2 text-sm text-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus"
+            >
+              <option value="1">1 (safest)</option>
+              <option value="2">2</option>
+              <option value="3">3</option>
+            </select>
+          </div>
+          <div class={`mt-5 ${rowClass}`}>
+            <div class="min-w-0">
+              <p class="text-sm font-medium text-ink">Cookies file</p>
+              <p class="mt-1 text-xs text-muted">
+                {cookies()
+                  ? 'Selected · path hidden for privacy'
+                  : 'Optional · needed for login-walled posts'}
+              </p>
+            </div>
+            <div class="flex gap-2">
+              <Show when={cookies()}>
+                <Button variant="ghost" size="sm" onClick={clearCookies}>
+                  Clear
+                </Button>
+              </Show>
+              <Button variant="secondary" size="sm" onClick={() => void pickCookies()}>
+                Choose…
+              </Button>
+            </div>
+          </div>
+          <div class={`mt-5 ${rowClass}`}>
+            <p class="text-sm font-medium text-ink">Downloader</p>
+            <p class="text-xs text-muted">
+              {ytdlp() === undefined
+                ? 'Checking…'
+                : ytdlp()!.version
+                  ? `yt-dlp v${ytdlp()!.version}`
+                  : 'Not available'}
+            </p>
+          </div>
+          <Show when={ytdlp()?.stale}>
+            <p class="mt-4 rounded-lg border border-amber-500/50 bg-amber-500/10 p-3 text-xs leading-5 text-ink">
+              The bundled downloader may be out of date. Downloads can fail until the app is
+              updated.
+            </p>
+          </Show>
+        </Surface>
+
+        <Surface title="Instagram avatars">
+          <div class={rowClass}>
+            <div class="min-w-0">
+              <p class="text-sm font-medium text-ink">Fetch Instagram profile pictures</p>
+              <p class="mt-1 text-xs leading-5 text-muted">
+                Off by default. When enabled, Connections can fetch current Instagram photos with
+                your selected cookies. Facebook is unsupported because its export has no handle.
+              </p>
+            </div>
+            <Button variant={fetchAvatars() ? 'primary' : 'secondary'} onClick={toggleFetchAvatars}>
+              {fetchAvatars() ? 'On' : 'Off'}
+            </Button>
+          </div>
+        </Surface>
+
+        <Surface title="Storage">
+          <div class={rowClass}>
+            <div>
+              <p class="text-sm font-medium text-ink">Downloads folder</p>
+              <p class="mt-1 text-xs text-muted">
+                {downloadsPath() ? 'Ready · path hidden for privacy' : 'Folder unavailable'}
+              </p>
+            </div>
+            <Button
+              variant="secondary"
+              disabled={!downloadsPath()}
+              onClick={() => void openExternal(downloadsPath()).catch(() => undefined)}
+            >
+              Open folder
+            </Button>
+          </div>
+        </Surface>
+
+        <Surface title="Diagnostics">
+          <p class="text-sm leading-6 text-muted">
+            Privacy-safe diagnostics are being prepared for the Windows beta. Demetafy does not send
+            telemetry, and this section does not collect or upload archive data.
+          </p>
+        </Surface>
+      </div>
     </div>
   );
 }

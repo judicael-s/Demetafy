@@ -8,20 +8,20 @@ import {
   Show,
   Switch,
   type JSX,
-} from "solid-js";
-import { A, useParams } from "@solidjs/router";
-import { createVirtualizer } from "@tanstack/solid-virtual";
+} from 'solid-js';
+import { A, useParams } from '@solidjs/router';
+import { createVirtualizer } from '@tanstack/solid-virtual';
 import {
   fetchSelfSender,
   fetchThread,
   type MsgMedia,
   type MsgReaction,
   type ThreadMessage,
-} from "../lib/queries";
-import { dmediaUrl, vmediaUrl } from "../lib/media";
-import { ArchiveVideo, FramedVideoThumb, isVideoUri } from "../components/ArchiveMedia";
-import { downloadQueue } from "../lib/downloads";
-import { DM_SLUG, itemKey } from "../lib/download-queue";
+} from '../lib/queries';
+import { dmediaUrl, vmediaUrl } from '../lib/media';
+import { ArchiveVideo, FramedVideoThumb, isVideoUri } from '../components/ArchiveMedia';
+import { downloadQueue } from '../lib/downloads';
+import { DM_SLUG, itemKey } from '../lib/download-queue';
 import {
   effLocalPathFor,
   effStatusFor,
@@ -29,13 +29,18 @@ import {
   isDownloaded,
   statusLabel,
   statusTone,
-} from "../lib/download-ui";
-import { isDownloadableShare } from "../lib/links";
-import { Avatar, avatarColor } from "../components/Avatar";
-import { buildChatRows, dayLabel, type ChatRow } from "../lib/chat-grouping";
-import { threadMediaItems } from "../lib/thread-media";
-import { viewer, type ViewerItem } from "../state/viewer";
-import { useApp } from "../state/app";
+} from '../lib/download-ui';
+import { isDownloadableShare } from '../lib/links';
+import { Avatar, avatarColor } from '../components/Avatar';
+import { buildChatRows, dayLabel, type ChatRow } from '../lib/chat-grouping';
+import { threadMediaItems } from '../lib/thread-media';
+import { viewer, type ViewerItem } from '../state/viewer';
+import { useApp } from '../state/app';
+import Button from '../components/Button';
+import { EmptyState } from '../components/EmptyState';
+import PageHeader from '../components/PageHeader';
+import { SkeletonList } from '../components/Skeleton';
+import { formatArchiveTimestamp } from '../lib/presentation';
 
 // Meta auto-inserts a standalone message when someone reacts; it duplicates the
 // reaction already attached to the target message. Strings are English even in
@@ -45,10 +50,6 @@ const REACTION_PSEUDO_PATTERNS: RegExp[] = [/^Reacted .+ to your message\s*$/, /
 
 function isReactionPseudo(content: string): boolean {
   return REACTION_PSEUDO_PATTERNS.some((re) => re.test(content));
-}
-
-function fmtTime(ms: number): string {
-  return new Date(ms).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
 }
 
 function hasMedia(m: MsgMedia): boolean {
@@ -63,7 +64,7 @@ function isAttachmentNotice(content: string): boolean {
 
 function MediaItem(props: {
   uri: string;
-  kind: "image" | "video" | "audio";
+  kind: 'image' | 'video' | 'audio';
   onOpen?: () => void;
 }): JSX.Element {
   const [failed, setFailed] = createSignal(false);
@@ -78,7 +79,7 @@ function MediaItem(props: {
       }
     >
       <Switch>
-        <Match when={props.kind === "image"}>
+        <Match when={props.kind === 'image'}>
           <button type="button" onClick={props.onOpen} class="block">
             <img
               src={url()}
@@ -87,12 +88,12 @@ function MediaItem(props: {
             />
           </button>
         </Match>
-        <Match when={props.kind === "video"}>
+        <Match when={props.kind === 'video'}>
           <button type="button" onClick={props.onOpen} class="relative block">
             <FramedVideoThumb src={url()} fill={false} class="block max-h-72 w-auto" />
           </button>
         </Match>
-        <Match when={props.kind === "audio"}>
+        <Match when={props.kind === 'audio'}>
           <audio src={url()} controls class="w-full" onError={() => setFailed(true)} />
         </Match>
       </Switch>
@@ -118,10 +119,10 @@ function MediaTile(props: { item: ViewerItem; onOpen: () => void }): JSX.Element
         }
       >
         <Show
-          when={props.item.kind === "image"}
+          when={props.item.kind === 'image'}
           fallback={
             <FramedVideoThumb
-              src={props.item.src ?? ""}
+              src={props.item.src ?? ''}
               poster={props.item.poster}
               class="absolute inset-0"
             />
@@ -158,25 +159,25 @@ function groupReactions(rs: MsgReaction[]): Array<{ reaction: string; actors: st
  */
 function SharedPost(props: { msg: ThreadMessage }): JSX.Element {
   const share = () => props.msg.media.share!;
-  const key = () => itemKey("message", props.msg.id);
+  const key = () => itemKey('message', props.msg.id);
   const status = () => effStatusFor(key(), props.msg.downloadStatus, downloadQueue.state);
   const live = () => downloadQueue.state.items[key()];
   const localPath = () => effLocalPathFor(key(), props.msg.localPath, downloadQueue.state);
   const thumb = () => effThumbPathFor(key(), props.msg.thumbPath, downloadQueue.state);
   const downloadable = () => isDownloadableShare(share().link);
-  const busy = () => status() === "queued" || status() === "running";
+  const busy = () => status() === 'queued' || status() === 'running';
   const playable = () => isDownloaded(status()) && !!localPath();
 
   const buttonLabel = () => {
-    if (busy()) return "Downloading…";
-    if (status() === "none") return "Download";
-    return "Retry";
+    if (busy()) return 'Downloading…';
+    if (status() === 'none') return 'Download';
+    return 'Retry';
   };
 
   const enqueue = () => {
     const link = share().link;
     if (link) {
-      downloadQueue.enqueue([{ source: "message", refId: props.msg.id, url: link, slug: DM_SLUG }]);
+      downloadQueue.enqueue([{ source: 'message', refId: props.msg.id, url: link, slug: DM_SLUG }]);
     }
   };
 
@@ -212,29 +213,27 @@ function SharedPost(props: { msg: ThreadMessage }): JSX.Element {
 
       <Show when={downloadable() && !playable()}>
         <div class="mt-1.5 flex items-center gap-2">
-          <button
-            class="rounded-md bg-accent px-2.5 py-1 text-xs font-medium text-accent-ink transition-opacity hover:opacity-90 disabled:opacity-40"
-            disabled={busy()}
-            onClick={enqueue}
-          >
+          <Button variant="primary" size="sm" disabled={busy()} onClick={enqueue}>
             {buttonLabel()}
-          </button>
-          <Show when={status() === "running"}>
+          </Button>
+          <Show when={status() === 'running'}>
             <span class="text-xs text-accent">{Math.round(live()?.progress ?? 0)}%</span>
           </Show>
-          <Show when={status() !== "none" && status() !== "running"}>
+          <Show when={status() !== 'none' && status() !== 'running'}>
             <span class={`text-xs ${statusTone(status())}`}>{statusLabel(status())}</span>
           </Show>
         </div>
       </Show>
 
-      <Show when={status() === "loginWalled"}>
+      <Show when={status() === 'loginWalled'}>
         <p class="mt-1 text-[11px] text-muted">
           Needs a logged-in session — add a cookies file in Settings, then retry.
         </p>
       </Show>
-      <Show when={status() === "error" && live()?.reason}>
-        <p class="mt-1 break-words text-[11px] text-red-400">{live()?.reason}</p>
+      <Show when={status() === 'error' && live()?.reason}>
+        <p class="mt-1 text-xs text-danger">
+          This shared item could not be downloaded. You can retry when ready.
+        </p>
       </Show>
     </div>
   );
@@ -269,7 +268,7 @@ function MessageBubble(props: {
       <Show when={props.row.dayStart}>
         <DaySeparator ts={m().timestampMs} />
       </Show>
-      <div class="px-1 pb-0.5" classList={{ "pt-1.5": runStart(), "pt-0.5": !runStart() }}>
+      <div class="px-1 pb-0.5" classList={{ 'pt-1.5': runStart(), 'pt-0.5': !runStart() }}>
         <div class="flex gap-2">
           <Show when={groupIncoming()}>
             <div class="w-7 shrink-0">
@@ -280,7 +279,7 @@ function MessageBubble(props: {
           </Show>
           <div
             class="flex min-w-0 flex-1 flex-col"
-            classList={{ "items-end": self(), "items-start": !self() }}
+            classList={{ 'items-end': self(), 'items-start': !self() }}
           >
             <Show when={groupIncoming() && runStart()}>
               <span
@@ -293,8 +292,8 @@ function MessageBubble(props: {
             <div
               class="max-w-[75%] rounded-2xl px-3.5 py-2"
               classList={{
-                "bg-accent text-accent-ink": self(),
-                "bg-surface text-ink": !self(),
+                'border border-accent/30 bg-accent/15 text-ink': self(),
+                'bg-surface text-ink': !self(),
               }}
             >
               <Show when={showText()}>
@@ -320,19 +319,21 @@ function MessageBubble(props: {
                 </div>
               </Show>
 
-              <div class="mt-1 text-[10px] opacity-60">{fmtTime(m().timestampMs)}</div>
+              <div class="mt-1 text-[10px] opacity-60">
+                {formatArchiveTimestamp(m().timestampMs)}
+              </div>
             </div>
 
             <Show when={reactions().length > 0}>
               <div
                 class="mt-1 flex flex-wrap gap-1"
-                classList={{ "mr-1": self(), "ml-1": !self() }}
+                classList={{ 'mr-1': self(), 'ml-1': !self() }}
               >
                 <For each={reactions()}>
                   {(r) => (
                     <span
                       class="rounded-full border border-border bg-surface px-1.5 py-0.5 text-xs"
-                      title={r.actors.join(", ")}
+                      title={r.actors.join(', ')}
                     >
                       {r.reaction}
                       <Show when={r.actors.length > 1}>
@@ -353,7 +354,7 @@ function MessageBubble(props: {
 export default function Thread(): JSX.Element {
   const params = useParams();
   const app = useApp();
-  const slug = () => decodeURIComponent(params.slug ?? "");
+  const slug = () => decodeURIComponent(params.slug ?? '');
 
   const [detail] = createResource(
     () => ({ s: slug(), id: app.activeArchiveId() }),
@@ -363,15 +364,23 @@ export default function Thread(): JSX.Element {
     () => app.activeArchiveId(),
     (id) => fetchSelfSender(id ?? undefined),
   );
+  const detailValue = () => {
+    if (detail.error) throw detail.error;
+    return detail();
+  };
+  const selfValue = () => {
+    if (selfSender.error) throw selfSender.error;
+    return selfSender();
+  };
 
-  const [search, setSearch] = createSignal("");
+  const [search, setSearch] = createSignal('');
   const [hidePseudo, setHidePseudo] = createSignal(false);
   const [atBottom, setAtBottom] = createSignal(true);
-  const [view, setView] = createSignal<"messages" | "media">("messages");
+  const [view, setView] = createSignal<'messages' | 'media'>('messages');
 
   const selfNames = createMemo(() => {
     const set = new Set<string>();
-    const s = selfSender();
+    const s = selfValue();
     if (s) set.add(s);
     const p = app.profile();
     if (p?.display_name) set.add(p.display_name);
@@ -381,10 +390,10 @@ export default function Thread(): JSX.Element {
   const isSelf = (sender: string) => selfNames().has(sender);
 
   // Group chats (3+ participants) get sender labels on incoming bubbles.
-  const isGroup = createMemo(() => (detail()?.thread.participants.length ?? 0) > 2);
+  const isGroup = createMemo(() => (detailValue()?.thread.participants.length ?? 0) > 2);
 
   const visible = createMemo(() => {
-    const d = detail();
+    const d = detailValue();
     if (!d) return [] as ThreadMessage[];
     let msgs = d.messages;
     if (hidePseudo()) msgs = msgs.filter((m) => !isReactionPseudo(m.content));
@@ -399,7 +408,7 @@ export default function Thread(): JSX.Element {
 
   // All thread media flattened once, for the gallery + inline bubble taps; a
   // tapped item opens the shared viewer at its position (matched by resolved src).
-  const threadItems = createMemo(() => threadMediaItems(detail()?.messages ?? []));
+  const threadItems = createMemo(() => threadMediaItems(detailValue()?.messages ?? []));
   const openMedia = (uri: string): void => {
     const src = vmediaUrl(uri);
     const idx = threadItems().findIndex((i) => i.src === src);
@@ -409,19 +418,21 @@ export default function Thread(): JSX.Element {
   // Downloadable posts/reels shared in THIS conversation (whole thread, not just the
   // filtered view) — powers the "download the whole conversation's shares" action.
   const shareTargets = createMemo(() =>
-    (detail()?.messages ?? []).filter((m) => isDownloadableShare(m.media.share?.link)),
+    (detailValue()?.messages ?? []).filter((m) => isDownloadableShare(m.media.share?.link)),
   );
   const pendingShares = createMemo(
     () =>
       shareTargets().filter(
         (m) =>
-          !isDownloaded(effStatusFor(itemKey("message", m.id), m.downloadStatus, downloadQueue.state)),
+          !isDownloaded(
+            effStatusFor(itemKey('message', m.id), m.downloadStatus, downloadQueue.state),
+          ),
       ).length,
   );
   const downloadAllShares = (): void => {
     downloadQueue.enqueue(
       shareTargets().map((m) => ({
-        source: "message" as const,
+        source: 'message' as const,
         refId: m.id,
         url: m.media.share!.link!,
         slug: DM_SLUG,
@@ -441,15 +452,15 @@ export default function Thread(): JSX.Element {
 
   // Land on the newest message when a thread first loads (chat convention).
   // Only when no search filter is active, so the user's filtered view is stable.
-  let scrolledFor = "";
+  let scrolledFor = '';
   createEffect(() => {
-    const d = detail();
+    const d = detailValue();
     if (!d || search() || hidePseudo()) return;
     if (scrolledFor === d.thread.slug) return;
     const n = visible().length;
     if (n === 0) return;
     scrolledFor = d.thread.slug;
-    queueMicrotask(() => virtualizer.scrollToIndex(n - 1, { align: "end" }));
+    queueMicrotask(() => virtualizer.scrollToIndex(n - 1, { align: 'end' }));
   });
 
   // Show the jump-to-newest affordance once the user has scrolled up ~1 screen.
@@ -460,7 +471,7 @@ export default function Thread(): JSX.Element {
   };
   const scrollToBottom = () => {
     const n = rows().length;
-    if (n > 0) virtualizer.scrollToIndex(n - 1, { align: "end" });
+    if (n > 0) virtualizer.scrollToIndex(n - 1, { align: 'end' });
   };
 
   return (
@@ -469,61 +480,50 @@ export default function Thread(): JSX.Element {
         <A href="/dms" class="text-sm text-muted hover:text-ink">
           ← Messages
         </A>
-        <Show when={detail()} fallback={<h1 class="mt-2 text-xl font-semibold">Loading…</h1>}>
+        <Show when={detailValue()} fallback={<SkeletonList rows={1} rowClass="mt-2 h-16" />}>
           {(d) => (
-            <div class="mt-2 flex items-center justify-between gap-4">
-              <div class="min-w-0">
-                <h1 class="truncate text-xl font-semibold tracking-tight">
-                  {d().thread.title || d().thread.participants.join(", ") || d().thread.slug}
-                </h1>
-                <p class="text-xs text-muted">
-                  {d().thread.participants.length} participant
-                  {d().thread.participants.length === 1 ? "" : "s"} ·{" "}
-                  {d().thread.messageCount.toLocaleString()} messages · {d().thread.source}
-                </p>
-              </div>
-              <Show when={shareTargets().length > 0}>
-                <button
-                  type="button"
-                  class="shrink-0 rounded-lg border border-border px-3 py-1.5 text-sm hover:border-accent disabled:opacity-40"
-                  disabled={pendingShares() === 0}
-                  onClick={downloadAllShares}
-                  title="Download every post/reel shared in this conversation"
-                >
-                  {pendingShares() > 0 ? `Download ${pendingShares()} shared` : "Shared posts saved"}
-                </button>
-              </Show>
+            <div class="mt-2">
+              <PageHeader
+                title={d().thread.title || d().thread.participants.join(', ') || d().thread.slug}
+                description={`${d().thread.participants.length.toLocaleString()} participant${d().thread.participants.length === 1 ? '' : 's'} · ${d().thread.messageCount.toLocaleString()} messages · ${d().thread.source}`}
+                actions={
+                  <Show when={shareTargets().length > 0}>
+                    <Button
+                      variant="secondary"
+                      disabled={pendingShares() === 0}
+                      onClick={downloadAllShares}
+                      title="Download every post or reel shared in this conversation"
+                    >
+                      {pendingShares() > 0
+                        ? `Download ${pendingShares()} shared`
+                        : 'Shared posts saved'}
+                    </Button>
+                  </Show>
+                }
+              />
             </div>
           )}
         </Show>
 
         <div class="mt-3 flex flex-wrap items-center gap-3">
           <div class="inline-flex rounded-lg border border-border p-0.5 text-sm">
-            <button
-              type="button"
-              class="rounded-md px-3 py-1"
-              classList={{
-                "bg-accent text-accent-ink": view() === "messages",
-                "text-muted": view() !== "messages",
-              }}
-              onClick={() => setView("messages")}
+            <Button
+              variant={view() === 'messages' ? 'primary' : 'ghost'}
+              size="sm"
+              onClick={() => setView('messages')}
             >
               Messages
-            </button>
-            <button
-              type="button"
-              class="rounded-md px-3 py-1"
-              classList={{
-                "bg-accent text-accent-ink": view() === "media",
-                "text-muted": view() !== "media",
-              }}
-              onClick={() => setView("media")}
+            </Button>
+            <Button
+              variant={view() === 'media' ? 'primary' : 'ghost'}
+              size="sm"
+              onClick={() => setView('media')}
             >
               Media
-            </button>
+            </Button>
           </div>
 
-          <Show when={view() === "messages"}>
+          <Show when={view() === 'messages'}>
             <input
               type="search"
               placeholder="Search this conversation…"
@@ -543,19 +543,25 @@ export default function Thread(): JSX.Element {
               Hide reaction notices
             </label>
           </Show>
-          <Show when={view() === "media"}>
+          <Show when={view() === 'media'}>
             <span class="text-xs text-muted">{threadItems().length.toLocaleString()} items</span>
           </Show>
         </div>
       </div>
 
       <Show
-        when={view() === "messages"}
+        when={view() === 'messages'}
         fallback={
           <div class="min-h-0 flex-1 overflow-y-auto px-6 py-4">
             <Show
               when={threadItems().length > 0}
-              fallback={<p class="text-sm text-muted">No media in this conversation.</p>}
+              fallback={
+                <EmptyState
+                  icon="dms"
+                  title="No media here"
+                  hint="This conversation contains text but no archived media."
+                />
+              }
             >
               <div class="grid grid-cols-3 gap-2 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6">
                 <For each={threadItems()}>
@@ -570,25 +576,26 @@ export default function Thread(): JSX.Element {
       >
         <div class="relative min-h-0 flex-1">
           <div ref={scrollEl} onScroll={onScroll} class="h-full overflow-y-auto px-6 py-3">
-            <Show
-              when={!detail.loading}
-              fallback={<p class="text-sm text-muted">Loading messages…</p>}
-            >
+            <Show when={!detail.loading} fallback={<SkeletonList rows={8} rowClass="h-16" />}>
               <Show
                 when={visible().length > 0}
                 fallback={
-                  <p class="text-sm text-muted">
-                    {search().trim()
-                      ? "No messages match your search."
-                      : "No messages in this thread."}
-                  </p>
+                  <EmptyState
+                    icon="dms"
+                    title={search().trim() ? 'No matching messages' : 'No messages here'}
+                    hint={
+                      search().trim()
+                        ? 'Try a different word or clear the conversation search.'
+                        : 'This exported conversation contains no messages.'
+                    }
+                  />
                 }
               >
                 <div
                   style={{
                     height: `${virtualizer.getTotalSize()}px`,
-                    position: "relative",
-                    width: "100%",
+                    position: 'relative',
+                    width: '100%',
                   }}
                 >
                   <For each={virtualizer.getVirtualItems()}>
@@ -606,10 +613,10 @@ export default function Thread(): JSX.Element {
                               data-index={vrow.index}
                               ref={(el) => queueMicrotask(() => virtualizer.measureElement(el))}
                               style={{
-                                position: "absolute",
+                                position: 'absolute',
                                 top: 0,
                                 left: 0,
-                                width: "100%",
+                                width: '100%',
                                 transform: `translateY(${vrow.start}px)`,
                               }}
                             >
@@ -626,16 +633,16 @@ export default function Thread(): JSX.Element {
           </div>
 
           <Show when={!atBottom() && visible().length > 0}>
-            <button
-              type="button"
+            <Button
+              variant="secondary"
               onClick={scrollToBottom}
               aria-label="Scroll to latest"
-              class="absolute bottom-4 right-4 flex size-9 items-center justify-center rounded-full border border-border bg-surface text-ink shadow-lg transition-opacity hover:opacity-90"
+              class="absolute bottom-4 right-4 !size-10 rounded-full !px-0 shadow-lg"
             >
               <svg viewBox="0 0 24 24" class="h-5 w-5 fill-current" aria-hidden="true">
                 <path d="M12 16l-6-6h12z" />
               </svg>
-            </button>
+            </Button>
           </Show>
         </div>
       </Show>

@@ -1,26 +1,24 @@
-import { createMemo, createResource, createSignal, For, Show, type JSX } from "solid-js";
-import { Portal } from "solid-js/web";
-import { fetchStories, type Story } from "../lib/queries";
-import { ArchiveImage, FramedVideoThumb, isVideoUri } from "../components/ArchiveMedia";
-import { EmptyState } from "../components/EmptyState";
-import { MediaReel } from "../components/MediaReel";
-import { SkeletonGrid } from "../components/Skeleton";
-import { vmediaUrl } from "../lib/media";
-import { useApp } from "../state/app";
-import { type ViewerItem } from "../state/viewer";
+import { createMemo, createResource, createSignal, For, Show, type JSX } from 'solid-js';
+import { Portal } from 'solid-js/web';
+import { fetchStories, type Story } from '../lib/queries';
+import { ArchiveImage, FramedVideoThumb, isVideoUri } from '../components/ArchiveMedia';
+import { EmptyState } from '../components/EmptyState';
+import { MediaReel } from '../components/MediaReel';
+import { SkeletonGrid } from '../components/Skeleton';
+import { vmediaUrl } from '../lib/media';
+import { useApp } from '../state/app';
+import { type ViewerItem } from '../state/viewer';
+import PageHeader from '../components/PageHeader';
+import { formatArchiveMonth, formatArchiveTimestamp } from '../lib/presentation';
 
 function storyItems(list: Story[]): ViewerItem[] {
   return list.map((s) => ({
-    kind: isVideoUri(s.uri) ? "video" : "image",
+    kind: isVideoUri(s.uri) ? 'video' : 'image',
     src: vmediaUrl(s.uri),
     caption: s.title || undefined,
     timestampMs: s.createdAt,
-    source: s.sourceApp === "FB" ? "Story · via Facebook" : "Story",
+    source: s.sourceApp === 'FB' ? 'Story · via Facebook' : 'Story',
   }));
-}
-
-function monthLabel(ms: number): string {
-  return new Date(ms).toLocaleDateString(undefined, { year: "numeric", month: "long" });
 }
 
 function StoryCard(props: { story: Story; onOpen: () => void }): JSX.Element {
@@ -38,7 +36,7 @@ function StoryCard(props: { story: Story; onOpen: () => void }): JSX.Element {
         >
           <FramedVideoThumb src={vmediaUrl(s.uri)} class="absolute inset-0" />
         </Show>
-        <Show when={s.sourceApp === "FB"}>
+        <Show when={s.sourceApp === 'FB'}>
           <span class="absolute left-2 top-2 rounded bg-black/60 px-1.5 py-0.5 text-[10px] text-white">
             via Facebook
           </span>
@@ -48,7 +46,7 @@ function StoryCard(props: { story: Story; onOpen: () => void }): JSX.Element {
         <Show when={s.title}>
           <p class="line-clamp-2 text-sm text-ink">{s.title}</p>
         </Show>
-        <p class="text-xs text-muted">{new Date(s.createdAt).toLocaleDateString()}</p>
+        <p class="text-xs text-muted">{formatArchiveTimestamp(s.createdAt)}</p>
       </div>
     </button>
   );
@@ -61,6 +59,11 @@ export default function Stories(): JSX.Element {
     (id) => fetchStories(id ?? undefined),
   );
 
+  const storyList = () => {
+    if (stories.error) throw stories.error;
+    return stories() ?? [];
+  };
+
   const [reel, setReel] = createSignal<{ items: ViewerItem[]; index: number } | null>(null);
   const openGroup = (list: Story[], index: number): void => {
     setReel({ items: storyItems(list), index });
@@ -69,8 +72,8 @@ export default function Stories(): JSX.Element {
   // Stories arrive newest-first; bucket consecutive ones by month label.
   const groups = createMemo(() => {
     const out: Array<{ label: string; items: Story[] }> = [];
-    for (const s of stories() ?? []) {
-      const label = monthLabel(s.createdAt);
+    for (const s of storyList()) {
+      const label = formatArchiveMonth(s.createdAt);
       const last = out[out.length - 1];
       if (last && last.label === label) last.items.push(s);
       else out.push({ label, items: [s] });
@@ -80,11 +83,15 @@ export default function Stories(): JSX.Element {
 
   return (
     <div class="flex h-full flex-col">
-      <div class="shrink-0 border-b border-border px-8 py-5">
-        <h1 class="text-2xl font-semibold tracking-tight">Stories</h1>
-        <Show when={stories()}>
-          <p class="mt-1 text-sm text-muted">{stories()!.length} archived</p>
-        </Show>
+      <div class="shrink-0 px-8 pt-5">
+        <PageHeader
+          title="Stories"
+          description={
+            stories.loading
+              ? 'Loading archived stories…'
+              : `${storyList().length.toLocaleString()} archived stories`
+          }
+        />
       </div>
 
       <div class="min-h-0 flex-1 overflow-y-auto px-8 py-5">
@@ -98,7 +105,7 @@ export default function Stories(): JSX.Element {
           }
         >
           <Show
-            when={(stories()?.length ?? 0) > 0}
+            when={storyList().length > 0}
             fallback={
               <EmptyState
                 icon="stories"
