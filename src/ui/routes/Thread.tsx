@@ -553,23 +553,25 @@ export default function Thread(): JSX.Element {
         when={view() === 'messages'}
         fallback={
           <div class="min-h-0 flex-1 overflow-y-auto px-6 py-4">
-            <Show
-              when={threadItems().length > 0}
-              fallback={
-                <EmptyState
-                  icon="dms"
-                  title="No media here"
-                  hint="This conversation contains text but no archived media."
-                />
-              }
-            >
-              <div class="grid grid-cols-3 gap-2 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6">
-                <For each={threadItems()}>
-                  {(it, i) => (
-                    <MediaTile item={it} onOpen={() => viewer.open(threadItems(), i())} />
-                  )}
-                </For>
-              </div>
+            <Show when={!detail.loading} fallback={<SkeletonList rows={6} rowClass="h-28" />}>
+              <Show
+                when={threadItems().length > 0}
+                fallback={
+                  <EmptyState
+                    icon="dms"
+                    title="No media here"
+                    hint="This conversation contains text but no archived media."
+                  />
+                }
+              >
+                <div class="grid grid-cols-3 gap-2 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6">
+                  <For each={threadItems()}>
+                    {(it, i) => (
+                      <MediaTile item={it} onOpen={() => viewer.open(threadItems(), i())} />
+                    )}
+                  </For>
+                </div>
+              </Show>
             </Show>
           </div>
         }
