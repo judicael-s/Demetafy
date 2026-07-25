@@ -224,4 +224,4 @@ Demetafy is licensed under the [GNU Affero General Public License v3.0 or later]
 
 The source is open. The name and brand are reserved.
 
-Created and maintained by [Judicael](https://github.com/judicael-s).
+Created and maintained by [Jules Sauvajol](https://www.linkedin.com/in/jules-sauvajol/).
